@@ -37,6 +37,13 @@ function Shell() {
       <main>{tab === 'files' ? <FilesPage /> : <SettingsPage />}</main>
       <footer className="app-footer muted">
         Files are published on-chain via system.remark and archived permanently by the DSN farmer network · the manifest is your retrieval credential — keep it safe
+        <br />
+        Part of the AI3.LAND toolset:
+        <a href="https://xdm-bridge.ai3.land/" target="_blank" rel="noreferrer noopener">
+          XDM Bridge
+        </a>
+        {' · '}
+        <a href="https://ai3.land/" target="_blank" rel="noreferrer noopener">ai3.land</a>
       </footer>
     </div>
   )

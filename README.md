@@ -94,6 +94,13 @@ Deployment records (tx / block) live in [contracts/deployments.json](contracts/d
 - **Confirmation policy** — publishes confirm at 12-block depth + canonical check (Autonomys testnet finality lag can reach 15 days; never wait for finalized).
 - **Real costs** — the frontend and scripts operate on mainnet and spend real AI3; the contracts are unaudited — verify with small amounts first.
 
+## Ecosystem
+
+More from the same family — open-source, pure-frontend tools for Autonomys:
+
+- **[XDM Bridge](https://xdm-bridge.ai3.land/)** — cross-domain AI3 transfers between the consensus chain and Auto EVM · [source](https://github.com/tgarm/ai3-xdm-bridge)
+- **[ai3.land](https://ai3.land/)** — the family's landing page
+
 ## License
 
 [MIT](LICENSE)
