@@ -3,6 +3,7 @@ import { WalletProvider } from '@autonomys/auto-wallet-react'
 import { ChainProvider } from './chain-context'
 import { SignerProvider } from './signer-context'
 import { WalletBar } from './components/WalletBar'
+import { ThemeToggle } from './components/ThemeToggle'
 import { FilesPage } from './pages/FilesPage'
 import { SettingsPage } from './pages/SettingsPage'
 
@@ -20,7 +21,10 @@ function Shell() {
             <p className="tagline">Permanent storage on Autonomys · No backend · No accounts</p>
           </div>
         </div>
-        <WalletBar />
+        <div className="header-side">
+          <ThemeToggle />
+          <WalletBar />
+        </div>
       </header>
       <nav className="tabs">
         <button className={tab === 'files' ? 'tab active' : 'tab'} onClick={() => setTab('files')}>

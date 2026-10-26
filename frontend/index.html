@@ -3,11 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
     <title>PermaDrive — Permanent Storage on Autonomys</title>
     <meta
       name="description"
       content="PermaDrive: a permissionless permanent storage client for Autonomys. Files go straight on-chain and are archived permanently by the farmer network."
     />
+    <script>
+      // Set the theme before first paint to avoid a flash; keep in sync with src/lib/theme.ts
+      ;(function () {
+        var t
+        try {
+          t = localStorage.getItem('theme')
+        } catch (e) {}
+        if (t !== 'dark' && t !== 'light') {
+          t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+        }
+        document.documentElement.dataset.theme = t
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>
