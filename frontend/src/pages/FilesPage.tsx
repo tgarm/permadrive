@@ -32,7 +32,7 @@ import {
   type TaskRecord,
 } from '../lib/store'
 
-const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 // P1 acceptance target was 1MB; larger files are deferred to P4 chunking
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 // single-file limit: larger files need chunked upload (not implemented yet)
 
 interface UploadSession {
   fileName: string
@@ -222,7 +222,7 @@ export function FilesPage() {
     saveBlob(new TextEncoder().encode(JSON.stringify(manifest, null, 2)), `${manifest.file.name}.manifest.json`, 'application/json')
   }
 
-  // ---- P2: on-chain registry (FileRegistry on Auto-EVM) ----
+  // ---- on-chain registry (FileRegistry on Auto-EVM) ----
 
   const syncedRootCids = new Set(registryRecords.map((r) => r.rootCid))
 

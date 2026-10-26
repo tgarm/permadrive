@@ -1,4 +1,4 @@
-// P0 PoC · publish side: file → IPLD pack → system.remark (utility.batch, falling back to per-node
+// PoC · publish side: file → IPLD pack → system.remark (utility.batch, falling back to per-node
 //         txs on failure) → confirmationDepth confirmation (the target chain's finality may lag for
 //         a long time; see lib/chain.mjs).
 // Usage: node publish.mjs [file path] [--size bytes]

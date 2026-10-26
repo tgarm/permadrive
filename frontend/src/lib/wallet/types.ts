@@ -1,5 +1,5 @@
 // Wallet layer abstraction: dual signing capability — Substrate signing
-// (publishing remarks) and EVM signing (P2: FileRegistry registration) side by
+// (publishing remarks) and EVM signing (FileRegistry registration) side by
 // side. Multi-protocol wallets like Talisman can provide both at once.
 //
 // Two Substrate signer implementations:
@@ -11,7 +11,7 @@
 //    signedExtensions definitions and must be constructed from api.registry;
 //    passing the pair directly to tx.signAsync lets polkadot handle it correctly
 //
-// Two EVM signer implementations (landed in P2):
+// Two EVM signer implementations:
 //  - injected: window.ethereum (MetaMask etc., EIP-1193), txs signed inside the extension
 //  - local: a BIP44 m/44'/60'/0'/0/0 account derived from the same mnemonic
 //    (viem HDAccount, dev/acceptance path — symmetric with the Substrate-side

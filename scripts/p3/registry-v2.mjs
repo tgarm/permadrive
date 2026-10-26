@@ -1,4 +1,4 @@
-// P3 · FileRegistryV2 helper operations (Node side):
+// FileRegistryV2 helper operations (Node side):
 //   node registry-v2.mjs info                          (address / fee rates / owner / treasury)
 //   node registry-v2.mjs entries <address>
 //   node registry-v2.mjs quote <size>

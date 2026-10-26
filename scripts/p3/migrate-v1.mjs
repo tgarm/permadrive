@@ -1,4 +1,4 @@
-// P3 · v1 → v2 registry migration: read v1 entries and re-register the ones missing from
+// v1 → v2 registry migration: read v1 entries and re-register the ones missing from
 // v2 at the normal fee (content addressing keeps manifestCid stable, so re-runs are
 // idempotent; DuplicateEntry is treated as already registered).
 // Usage: npm run migrate-v1 [ownerAddress]   (default = the address derived from CHAIN_MNEMONIC)

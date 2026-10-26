@@ -1,8 +1,8 @@
-// P3 · Compile FileRegistryV2.sol; v1 is recompiled too, to emit the frozen ABI used for
+// Compile FileRegistryV2.sol; v1 is recompiled too, to emit the frozen ABI used for
 // read-only access and migration.
 // Outputs:
 //   contracts/out/FileRegistryV2.json        v2 full artifact (bytecode + abi)
-//   contracts/out/FileRegistry.json          v1 full artifact (kept, identical to the P2 output)
+//   contracts/out/FileRegistry.json          v1 full artifact (kept)
 //   frontend/src/lib/registry-abi.ts         v2 ABI (frontend default)
 //   frontend/src/lib/registry-abi-v1.ts      v1 ABI (frozen: decoding v1 entries + migration
 //                                            reads; Entry has no feePaid field, so it is
@@ -21,7 +21,7 @@ function compile(name) {
     sources: { [name]: { content: readFileSync(ROOT + 'contracts/' + name, 'utf8') } },
     settings: {
       optimizer: { enabled: true, runs: 200 },
-      evmVersion: 'paris', // no reliance on newer EVM opcodes, safe on any frontier domain (same as P2)
+      evmVersion: 'paris', // no reliance on newer EVM opcodes, safe on any frontier domain
       // immutableReferences: immutables in deployedBytecode are zero placeholders, filled
       // with real values only at construction (v2's treasury). On-chain code comparison
       // must apply this patch first.

@@ -1,6 +1,6 @@
 // Retrieval library: input is a manifest, provenance is irrelevant — behaves
 // identically for self-published and third-party data (closed loop verified in
-// P0). The flow matches scripts/poc/retrieve.mjs: start from the blocks
+// The flow matches scripts/poc/retrieve.mjs: start from the blocks
 // recorded in manifest.txs to fetch nodes, walk back toward parent blocks when
 // nodes are missing (a utility.batch can straddle blocks), then assemble along
 // the DAG once everything is collected.

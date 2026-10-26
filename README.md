@@ -18,6 +18,8 @@ Files are packed into IPLD DAGs in the browser and published directly to the Aut
 - **No required backend** — the build output is fully static and hostable anywhere; all dependencies (RPC, indexer) are permissionless public infrastructure with CORS enabled (browser-direct)
 - **Manifest as proof** — a single JSON manifest describes everything needed for retrieval; export / import / share it
 - **Cross-device recovery** — on a new device, the same wallet signature recovers the full file index from the on-chain registry and re-downloads the files
+- **Versioned notes** — append-only text records; every save publishes a new immutable version and registers it in the on-chain registry (the version chain survives any device; unchanged content re-saving is free under content addressing)
+- **Encrypted vault** — a password manager whose entries are AES-256-GCM encrypted as one envelope before publishing; the data key is wrapped twice — by your passphrase (exportable keystore file, the universal recovery path) and by an EVM wallet signature (passphrase-free unlock on new devices). Only ciphertext ever reaches the chain
 
 ## Repository layout
 
@@ -28,7 +30,7 @@ scripts/
   verify/               Read-only checks of public endpoints and on-chain fees (no tx, no signing)
   poc/                  End-to-end protocol scripts: pack & publish / scan & retrieve / account generation (shared lib)
   p2/                   FileRegistry v1 compile / deploy / interaction; XDM cross-domain funding helper
-  p3/                   FileRegistryV2 compile / deploy / semantic selftest / v1→v2 migration
+  p3/                   FileRegistryV2 compile / deploy / semantic selftest / v1→v2 migration; vault crypto format selftest
 ```
 
 ## Quick start (frontend)
@@ -76,6 +78,7 @@ node rpc-check.mjs && node indexer-check.mjs && node fee-estimate.mjs
 cd ../p3 && npm install
 npm run compile
 npm run selftest          # semantic selftest against the deployed contract (idempotent)
+npm run vault-crypto      # offline vault envelope/keystore crypto selftest (no account, no cost)
 ```
 
 ## Deployed contracts (Auto-EVM mainnet, chainId 870)
@@ -89,7 +92,8 @@ Deployment records (tx / block) live in [contracts/deployments.json](contracts/d
 
 ## Notes
 
-- **On-chain data is public by default** — anyone can read it. "My files" is index ownership, not access control; do not upload anything you don't want public.
+- **On-chain data is public by default** — anyone can read it. "My files" and Notes publish in the clear (Notes are plaintext by design; private text belongs in the Vault, whose envelope is ciphertext). Index ownership is not access control; do not publish anything you don't want public.
+- **The vault keystore is the only universal recovery path** — wallet-signature unlock depends on reproducible signatures (verified for local EVM keys; most extension wallets work, some may not). Losing both the wallet AND the keystore file means the ciphertext stays on-chain forever but can never be opened.
 - **Public RPCs are rate-limited** — the scripts throttle and back off; do not hammer public nodes with concurrency.
 - **Confirmation policy** — publishes confirm at 12-block depth + canonical check (Autonomys testnet finality lag can reach 15 days; never wait for finalized).
 - **Real costs** — the frontend and scripts operate on mainnet and spend real AI3; the contracts are unaudited — verify with small amounts first.

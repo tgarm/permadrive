@@ -1,4 +1,4 @@
-// P3 · Shared on-chain setup: Auto-EVM mainnet (chainId 870), deployments keys, signer loading.
+// Shared on-chain setup: Auto-EVM mainnet (chainId 870), deployments keys, signer loading.
 // Known pitfall: this RPC occasionally fails the TLS handshake; just re-run the script
 // (the viem http transport has no built-in retry).
 

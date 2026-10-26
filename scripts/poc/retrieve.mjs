@@ -1,4 +1,4 @@
-// P0 PoC · retrieve side: manifest → poll the indexer for object mappings → chain_getBlock
+// PoC · retrieve side: manifest → poll the indexer for object mappings → chain_getBlock
 // extract remarks → decodeNode → assemble the DAG → compare sha256 with the original file.
 // Usage: node retrieve.mjs [manifest.json] [--skip-indexer] [--timeout minutes]
 //   With no manifest given, uses the newest one in out/.
@@ -97,7 +97,7 @@ await api.disconnect()
 if (sha256 === manifest.file.sha256) {
   console.log('  sha256(original) =', manifest.file.sha256)
   console.log('  sha256(retrieved)=', sha256)
-  console.log('\n════ P0 PoC PASS: round-trip bit-identical ════')
+  console.log('\n════ PoC PASS: round-trip bit-identical ════')
 } else {
   console.error(`  ✗ sha256 mismatch!\n    original ${manifest.file.sha256}\n    retrieved ${sha256}`)
   process.exit(1)

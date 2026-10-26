@@ -6,7 +6,7 @@
 //                           first-order approximation
 //   publishPrepared(...)    wallet signs → utility.batch single tx preferred;
 //                           if the node rejects it, fall back to signing each
-//                           tx individually (P0 handover: 1 MB ≈ 17 nodes in a
+//                           tx individually (measured on mainnet: 1 MB ≈ 17 nodes in a
 //                           single tx was untested at the time; batched per-tx
 //                           submission is a normal path, not an error) →
 //                           confirmationDepth confirmation → manifest v1

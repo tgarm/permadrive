@@ -2,7 +2,7 @@
 // the Settings page (persisted in localStorage). A manifest only records the
 // network identifier ("mainnet"), never embedded endpoints — endpoints belong
 // to application config.
-// P2/P3: the Auto-EVM RPC and FileRegistry addresses are overridable the same
+// The Auto-EVM RPC and FileRegistry addresses are overridable the same
 // way (defaults are the mainnet official endpoints and the deployment
 // artifacts of the scripts/p2 and scripts/p3 deploys).
 
@@ -24,7 +24,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   evmRpcUrl: 'https://auto-evm.mainnet.autonomys.xyz/ws',
   // FileRegistry v2 mainnet deployment (contracts/deployments.json auto-evm-mainnet-v2, 2026-10-26)
   registryAddress: '0x79a22e5dc2e0613d8e9b491a1a51038b9197b185',
-  // FileRegistry v1 mainnet deployment (P2, 2026-10-26, frozen read-only)
+  // FileRegistry v1 mainnet deployment (2026-10-26, frozen read-only)
   registryV1Address: '0x1751f7534b85417da6e093a2e85b4b7b90ee2e4a',
 }
 

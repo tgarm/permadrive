@@ -1,4 +1,4 @@
-// P0 PoC · validates the retrieval path upfront (no test tokens needed): scan recent blocks for
+// PoC · validates the retrieval path upfront (no test tokens needed): scan recent blocks for
 // publishers such as AutoDrive, decode every system.remark in those blocks into nodes → find file
 // DAGs complete enough to assemble → assemble → cross-check with the object-mapping indexer that
 // these nodes have really been archived by the DSN.

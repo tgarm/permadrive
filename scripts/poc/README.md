@@ -1,11 +1,11 @@
-# scripts/poc — P0 PoC (end-to-end round trip)
+# scripts/poc — end-to-end protocol round trip
 
 End-to-end round trip at the protocol layer: **pack → system.remark → indexer lookup →
 chain_getBlock retrieval → decode and assemble**, with the round-trip data sha256-identical.
 
 ## Verified results (2026-10-25)
 
-- **P0 acceptance passed (own-publish round trip on mainnet)**: 200KB sample (5 nodes) published in a single `utility.batch`
+- **Verified on mainnet (own-publish round trip)**: 200KB sample (5 nodes) published in a single `utility.batch`
   → block **#10,126,067**, tx `0x307772b5b6f7fb06…`, actual cost **0.4121 AI3**
   → **~100s** after publishing, all 5/5 nodes had object mappings on the indexer
   → chain_getBlock retrieval → assembled **sha256 exactly matches the original file**.

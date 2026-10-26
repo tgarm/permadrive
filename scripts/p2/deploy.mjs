@@ -1,4 +1,4 @@
-// P2 · Deploy FileRegistry to Auto-EVM mainnet (chainId 870).
+// Deploy FileRegistry to Auto-EVM mainnet (chainId 870).
 // Signer = the EVM account derived at m/44'/60'/0'/0/0 from CHAIN_MNEMONIC (funded via xdm-transfer).
 // After deploy: eth_getCode self-check against deployedBytecode; the record is appended to contracts/deployments.json (key auto-evm-mainnet).
 // Usage: npm run deploy

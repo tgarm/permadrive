@@ -1,4 +1,4 @@
-// P2 · XDM transfer: consensus-chain AI3 → Auto-EVM (transporter.transfer).
+// XDM transfer: consensus-chain AI3 → Auto-EVM (transporter.transfer).
 // Arrival takes ~10 minutes (100 domain blocks); this script only ensures the source-chain
 // tx gets included and confirmed.
 // EVM recipient = BIP44 m/44'/60'/0'/0/0 derivation of CHAIN_MNEMONIC (viem, same default
@@ -11,7 +11,7 @@
 //    work as-is
 //  - A bare WsProvider/HttpProvider fires several requests the moment it connects and hits
 //    rate limiting (public nodes rate-limit by frequency; while banned even system_chain
-//    is refused), so a paced provider is mandatory (same as P1)
+//    is refused), so a paced provider is mandatory
 // Usage: npm run xdm-transfer -- [--amount AI3 amount, default 1 (protocol minimum)]
 
 import { readFileSync, existsSync } from 'node:fs'

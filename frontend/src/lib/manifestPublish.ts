@@ -1,7 +1,7 @@
 // Re-publishing the manifest into the DSN: the manifest v1 is serialized as a
 // file named `${rootCid}.manifest.json` (fixed name → content-addressed
 // determinism: repacking the same manifest on any device yields the same CID),
-// pushed through the P1 publish pipeline (one-node remark) into a block, and
+// pushed through the shared publish pipeline (one-node remark) into a block, and
 // the returned location info is used for the FileRegistry registration.
 //
 // The returned outerManifest is not stored or exported — it is only the

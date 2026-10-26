@@ -1,4 +1,4 @@
-// P3 · Deploy FileRegistryV2 to Auto-EVM mainnet (chainId 870).
+// Deploy FileRegistryV2 to Auto-EVM mainnet (chainId 870).
 // Constructor args: treasury = deployer (zero-sum during development; can switch to a
 //                   multisig/new address for production),
 //                   feePerByte = 105,245,676,421 (≈5% × consensus transactionByteFee),

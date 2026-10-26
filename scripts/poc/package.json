@@ -2,7 +2,7 @@
   "name": "permadrive-poc",
   "private": true,
   "type": "module",
-  "description": "P0 PoC: pack → system.remark → indexer → chain_getBlock → decode → assemble, on Autonomys",
+  "description": "PoC scripts: pack → system.remark → indexer → chain_getBlock → decode → assemble, on Autonomys",
   "engines": {
     "node": ">=22.0.0"
   },

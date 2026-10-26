@@ -2,7 +2,7 @@
   "name": "permadrive-p2",
   "private": true,
   "type": "module",
-  "description": "P2: FileRegistry v1 contract toolchain — compile/deploy on Auto-EVM mainnet (chainId 870) + XDM funding",
+  "description": "FileRegistry v1 contract toolchain — compile/deploy on Auto-EVM mainnet (chainId 870) + XDM funding",
   "engines": {
     "node": ">=22.0.0"
   },

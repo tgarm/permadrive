@@ -1,6 +1,6 @@
 // Active signer context: written by WalletBar (extension wallet or local key),
 // consumed by FilesPage. The dual-signer abstraction lives in
-// src/lib/wallet/types.ts — Substrate (publishing remarks) and EVM (P2
+// src/lib/wallet/types.ts — Substrate (publishing remarks) and EVM
 // FileRegistry registration) activate independently of each other.
 
 import { createContext, useContext, useState, type ReactNode } from 'react'

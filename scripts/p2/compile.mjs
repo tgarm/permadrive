@@ -1,4 +1,4 @@
-// P2 · Compile FileRegistry.sol (solc-js, optimizer 200 / evmVersion paris — no
+// Compile FileRegistry.sol (solc-js, optimizer 200 / evmVersion paris — no
 // reliance on newer EVM opcodes, safe on any frontier domain). Outputs:
 //   contracts/out/FileRegistry.json          full artifact (bytecode + abi)
 //   frontend/src/lib/registry-abi.ts         ABI only (TS const, bundled by the frontend)

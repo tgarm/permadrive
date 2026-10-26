@@ -1,4 +1,4 @@
-// P2 · Registry helper operations (Node side; post-deploy self-check / acceptance aid / debugging):
+// Registry helper operations (Node side; post-deploy self-check / acceptance aid / debugging):
 //   node registry.mjs entries <address>
 //   node registry.mjs register <manifestCid> <height> <name> <size>
 //   node registry.mjs remove <manifestCid>

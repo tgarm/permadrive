@@ -1,7 +1,7 @@
 // manifest v1 — a self-contained, shareable retrieval unit.
 // A manifest plus any standard node plus the indexer is enough to retrieve the
 // file, with no dependency on the uploader's local state.
-// P1 invariant: encryption/compression are null (enabled in P3); nodes[].blake3
+// invariant: encryption/compression are null (reserved for future use); nodes[].blake3
 // is bare hex in indexer convention (no 0x prefix).
 
 export interface ManifestTx {
