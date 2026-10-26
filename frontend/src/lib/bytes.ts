@@ -6,6 +6,13 @@ export const toHex = (bytes: Uint8Array): string => {
   return out
 }
 
+export const fromHex = (hex: string): Uint8Array => {
+  const clean = hex.startsWith('0x') ? hex.slice(2) : hex
+  const out = new Uint8Array(clean.length / 2)
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16)
+  return out
+}
+
 export const concatBytes = (parts: Uint8Array[]): Uint8Array => {
   let total = 0
   for (const p of parts) total += p.length

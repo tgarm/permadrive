@@ -5,9 +5,11 @@ import { SignerProvider } from './signer-context'
 import { WalletBar } from './components/WalletBar'
 import { ThemeToggle } from './components/ThemeToggle'
 import { FilesPage } from './pages/FilesPage'
+import { NotesPage } from './pages/NotesPage'
+import { VaultPage } from './pages/VaultPage'
 import { SettingsPage } from './pages/SettingsPage'
 
-type Tab = 'files' | 'settings'
+type Tab = 'files' | 'notes' | 'vault' | 'settings'
 
 function Shell() {
   const [tab, setTab] = useState<Tab>('files')
@@ -30,13 +32,29 @@ function Shell() {
         <button className={tab === 'files' ? 'tab active' : 'tab'} onClick={() => setTab('files')}>
           My Files
         </button>
+        <button className={tab === 'notes' ? 'tab active' : 'tab'} onClick={() => setTab('notes')}>
+          Notes
+        </button>
+        <button className={tab === 'vault' ? 'tab active' : 'tab'} onClick={() => setTab('vault')}>
+          Vault
+        </button>
         <button className={tab === 'settings' ? 'tab active' : 'tab'} onClick={() => setTab('settings')}>
           Settings
         </button>
       </nav>
-      <main>{tab === 'files' ? <FilesPage /> : <SettingsPage />}</main>
+      <main>
+        {tab === 'files' ? (
+          <FilesPage />
+        ) : tab === 'notes' ? (
+          <NotesPage />
+        ) : tab === 'vault' ? (
+          <VaultPage />
+        ) : (
+          <SettingsPage />
+        )}
+      </main>
       <footer className="app-footer muted">
-        Files are published on-chain via system.remark and archived permanently by the DSN farmer network · the manifest is your retrieval credential — keep it safe
+        Files and texts are published on-chain via system.remark and archived permanently by the DSN farmer network · the manifest is your retrieval credential · the vault envelope only ever holds ciphertext — keep the keystore file offline
         <br />
         Part of the AI3.LAND toolset:
         <a href="https://xdm-bridge.ai3.land/" target="_blank" rel="noreferrer noopener">
