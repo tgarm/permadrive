@@ -19,7 +19,7 @@ Files are packed into IPLD DAGs in the browser and published directly to the Aut
 - **Manifest as proof** — a single JSON manifest describes everything needed for retrieval; export / import / share it
 - **Cross-device recovery** — on a new device, the same wallet signature recovers the full file index from the on-chain registry and re-downloads the files
 - **Versioned notes** — append-only text records; every save publishes a new immutable version and registers it in the on-chain registry (the version chain survives any device; unchanged content re-saving is free under content addressing)
-- **Encrypted vault** — a password manager whose entries are AES-256-GCM encrypted as one envelope before publishing; the data key is wrapped twice — by your passphrase (exportable keystore file, the universal recovery path) and by an EVM wallet signature (passphrase-free unlock on new devices). Only ciphertext ever reaches the chain
+- **Encrypted vault** — a password manager whose entries are AES-256-GCM encrypted as one envelope before publishing; the data key is wrapped twice — by your passphrase (exportable keystore file, the universal recovery path) and by an EVM wallet signature (passphrase-free unlock on new devices). Only ciphertext ever reaches the chain. Full principles, threat model and do-it-yourself verification: [VAULT.md](VAULT.md)
 
 ## Repository layout
 

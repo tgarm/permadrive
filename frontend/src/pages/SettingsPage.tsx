@@ -61,14 +61,6 @@ export function SettingsPage() {
           <span>FileRegistry v2 contract address (on-chain registry · dev fee applies)</span>
           <input value={form.registryAddress} onChange={(e) => setForm({ ...form, registryAddress: e.target.value })} spellCheck={false} />
         </label>
-        <label className="field">
-          <span>FileRegistry v1 contract address (read-only · legacy registry migration)</span>
-          <input
-            value={form.registryV1Address}
-            onChange={(e) => setForm({ ...form, registryV1Address: e.target.value })}
-            spellCheck={false}
-          />
-        </label>
         <div className="row">
           <button className="btn primary" onClick={() => void save()}>
             Save

@@ -1,18 +1,16 @@
-// FileRegistry contract interaction (Auto-EVM + dev fee).
-// Defaults to v2 (payable register: fee = max(minFee, size × feePerByte),
-// overpayment is refunded, the fee goes straight to the treasury); v1 is
-// frozen and read-only, kept for migrating old registries and recovery fallback.
-// DuplicateEntry is treated as "already registered" (idempotent semantics);
-// every other error is rethrown.
+// FileRegistry v2 contract interactions (Auto-EVM; register is payable:
+// fee = max(minFee, size x feePerByte), overpayment is refunded, the fee goes
+// straight to the treasury). DuplicateEntry is treated as "already registered"
+// (idempotent semantics); every other error propagates.
+// The frozen v1 contract lives only in on-chain history (deployments.json) —
+// it never had a public launch, so the frontend no longer integrates it
+// (operator decision, 2026-10-27).
 
 import { createPublicClient, createWalletClient, custom, http, type PublicClient, type WalletClient } from 'viem'
 import { loadConfig } from './config'
 import { autoEvmChain } from './evm'
 import { REGISTRY_ABI } from './registry-abi'
-import { REGISTRY_V1_ABI } from './registry-abi-v1'
 import type { EvmSigner } from './wallet/types'
-
-export type RegistrySource = 'v2' | 'v1'
 
 export interface RegistryEntry {
   manifestCid: string
@@ -20,8 +18,7 @@ export interface RegistryEntry {
   name: string
   size: bigint
   registeredAt: bigint
-  /** v2 entries only (absent from the v1 ABI; migration/recovery code must not depend on it) */
-  feePaid?: bigint
+  feePaid: bigint
 }
 
 let publicClientCache: { rpcUrl: string; client: PublicClient } | null = null
@@ -34,18 +31,12 @@ export function registryPublicClient(): PublicClient {
   return client
 }
 
-function registryAddress(source: RegistrySource = 'v2'): `0x${string}` {
-  const cfg = loadConfig()
-  const addr = source === 'v1' ? cfg.registryV1Address : cfg.registryAddress
+function registryAddress(): `0x${string}` {
+  const addr = loadConfig().registryAddress
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr) || /^0x0{40}$/.test(addr)) {
-    throw new Error(`FileRegistry ${source} address not configured (Settings → on-chain registry, or built in once the mainnet deployment lands)`)
+    throw new Error('FileRegistry address not configured (Settings → on-chain registry, or built in once the mainnet deployment lands)')
   }
   return addr as `0x${string}`
-}
-
-const ABI_FOR: Record<RegistrySource, typeof REGISTRY_ABI | typeof REGISTRY_V1_ABI> = {
-  v2: REGISTRY_ABI,
-  v1: REGISTRY_V1_ABI,
 }
 
 export function walletClientFor(signer: EvmSigner): WalletClient {
@@ -75,10 +66,10 @@ async function waitWritten(hash: `0x${string}`): Promise<void> {
 const accountOf = (signer: EvmSigner) =>
   signer.kind === 'injected' ? (signer.address as `0x${string}`) : signer.account!
 
-export async function fetchEntries(owner: string, source: RegistrySource = 'v2'): Promise<RegistryEntry[]> {
+export async function fetchEntries(owner: string): Promise<RegistryEntry[]> {
   const raw = (await registryPublicClient().readContract({
-    address: registryAddress(source),
-    abi: ABI_FOR[source],
+    address: registryAddress(),
+    abi: REGISTRY_ABI,
     functionName: 'entries',
     args: [owner as `0x${string}`],
   })) as RegistryEntry[]
@@ -92,7 +83,7 @@ export async function getEvmBalance(address: string): Promise<bigint> {
 /** Register-fee quote for the v2 contract (max(minFee, size × feePerByte), in wei) */
 export async function quoteRegisterFee(size: number): Promise<bigint> {
   return registryPublicClient().readContract({
-    address: registryAddress('v2'),
+    address: registryAddress(),
     abi: REGISTRY_ABI,
     functionName: 'quote',
     args: [BigInt(size)],
@@ -122,7 +113,7 @@ export async function registerFile(
   try {
     const fee = opts.fee ?? (await quoteRegisterFee(args.size))
     const hash = await wallet.writeContract({
-      address: registryAddress('v2'),
+      address: registryAddress(),
       abi: REGISTRY_ABI,
       functionName: 'register',
       args: [args.manifestCid, args.height, args.name, BigInt(args.size)],
@@ -144,7 +135,7 @@ export async function registerFile(
 export async function removeFile(signer: EvmSigner, manifestCid: string): Promise<string> {
   const wallet = walletClientFor(signer)
   const hash = await wallet.writeContract({
-    address: registryAddress('v2'),
+    address: registryAddress(),
     abi: REGISTRY_ABI,
     functionName: 'remove',
     args: [manifestCid],

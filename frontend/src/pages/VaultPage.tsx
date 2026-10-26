@@ -348,7 +348,7 @@ export function VaultPage() {
     if (!evm) return
     setBusy('reading the on-chain registry…')
     try {
-      const registryEntries = await fetchEntries(evm.address, 'v2')
+      const registryEntries = await fetchEntries(evm.address)
       // Ascending (growing height = version order), matching the publish-side
       // versions[] convention (the UI lists the newest first)
       const vaultEntries = registryEntries
@@ -469,6 +469,10 @@ export function VaultPage() {
       {record && !unlocked && !keystorePending && (
         <section className="card">
           <h2>Vault locked ({record.address.slice(0, 10)}… · {record.versions.length} on-chain version{record.versions.length === 1 ? '' : 's'})</h2>
+          <p className="muted small-text" style={{ marginTop: 0 }}>
+            Unlocking = signing one fixed message with your EVM wallet; the decryption key is derived locally — the private key never leaves the
+            wallet, no passphrase needed, no transaction.
+          </p>
           <div className="row">
             <button className="btn primary" onClick={() => void unlockWithWallet()} disabled={!!busy}>
               Unlock with wallet signature
@@ -479,7 +483,7 @@ export function VaultPage() {
             {busy && <span className="stage-line" style={{ marginTop: 0 }}>{busy}</span>}
           </div>
           <div className="divider" />
-          <p className="muted small-text">If the wallet is unavailable (new wallet / signature channel failed), use the keystore from creation:</p>
+          <p className="muted small-text">If the wallet is unavailable (new wallet / some extension wallets sign non-reproducibly), unlock with the keystore file exported at creation + your passphrase:</p>
           <div className="row" style={{ marginTop: 4 }}>
             <input
               type="file"

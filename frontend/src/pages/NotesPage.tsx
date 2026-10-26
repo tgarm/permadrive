@@ -241,7 +241,7 @@ export function NotesPage() {
     setRecovering(true)
     try {
       setNotice('reading the on-chain registry…')
-      const entries = await fetchEntries(evm.address, 'v2')
+      const entries = await fetchEntries(evm.address)
       const groups = groupNoteEntries(entries)
       if (groups.size === 0) {
         setNotice(`no note entries in the registry (${entries.length} registrations total)`)

@@ -78,7 +78,6 @@ export function FilesPage() {
   const [rowBusy, setRowBusy] = useState<RowBusy>({})
   const [notice, setNotice] = useState<string | null>(null)
   const [recoverState, setRecoverState] = useState<string | null>(null)
-  const [migrating, setMigrating] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
@@ -284,8 +283,7 @@ export function FilesPage() {
   }
 
   // Recover = read Registry entries -> block-scan to rebuild the manifests -> store
-  // locally (the main cross-device recovery path). v2 is primary, v1 is the
-  // fallback (entries present in v1 but missing from v2 are still recoverable).
+  // locally (the main cross-device recovery path)
   const recoverFromRegistry = async () => {
     setNotice(null)
     if (!evmSigner) {
@@ -293,18 +291,11 @@ export function FilesPage() {
       return
     }
     try {
-      setRecoverState('Reading on-chain registry…')
-      const v2Entries = await fetchEntries(evmSigner.address, 'v2')
-      const v1Entries = await fetchEntries(evmSigner.address, 'v1').catch(() => [])
-      const v2Cids = new Set(v2Entries.map((e) => e.manifestCid))
-      const v1Only = v1Entries.filter((e) => !v2Cids.has(e.manifestCid))
-      const entries = [...v2Entries, ...v1Only]
+      setRecoverState('Reading the on-chain registry…')
+      const entries = await fetchEntries(evmSigner.address)
       if (entries.length === 0) {
-        setRecoverState(`Registry is empty (${evmSigner.address.slice(0, 10)}… has no registered entries)`)
+        setRecoverState(`Empty registry (${evmSigner.address.slice(0, 10)}… has no registrations)`)
         return
-      }
-      if (v2Entries.length === 0 && v1Only.length > 0) {
-        setRecoverState(`v2 registry is empty; v1 has ${v1Only.length} legacy entries — run "Migrate from v1" first`)
       }
       const api = await connect()
       const known = new Set((await listManifests()).map((m) => m.rootCid))
@@ -326,60 +317,16 @@ export function FilesPage() {
           recovered += known.has(manifest.rootCid) ? 0 : 1
           skipped += known.has(manifest.rootCid) ? 1 : 0
         } catch (e) {
-          setRecoverState(`✗ Failed to recover "${entry.name}": ${(e as Error).message}`)
+          setRecoverState(`✗ "${entry.name}" recovery failed: ${(e as Error).message}`)
           return
         }
       }
       await refresh()
       setRecoverState(
-        `✓ Recovery complete: ${recovered} new files${skipped > 0 ? ` · ${skipped} already present` : ''}` +
-          ` (v2: ${v2Entries.length} entries${v1Only.length > 0 ? ` + ${v1Only.length} v1 fallback` : ''})`,
+        `✓ Recovery complete: ${recovered} new file${recovered === 1 ? '' : 's'}${skipped > 0 ? ` · ${skipped} already present` : ''} (${entries.length} registrations total)`,
       )
     } catch (e) {
       setRecoverState(`✗ ${(e as Error).message}`)
-    }
-  }
-
-  // v1 -> v2 registry migration: entries present in v1 but missing from v2 are
-  // re-registered at the normal fee. Content addressing keeps manifestCid stable,
-  // so re-running is idempotent (DuplicateEntry counts as already registered).
-  const migrateV1Registry = async () => {
-    setNotice(null)
-    if (!evmSigner) {
-      setRecoverState('✗ Connect an EVM signer first (the registry wallet)')
-      return
-    }
-    setMigrating(true)
-    try {
-      setRecoverState('Reading legacy v1 registry…')
-      const [v1Entries, v2Entries] = await Promise.all([
-        fetchEntries(evmSigner.address, 'v1'),
-        fetchEntries(evmSigner.address, 'v2'),
-      ])
-      const inV2 = new Set(v2Entries.map((e) => e.manifestCid))
-      const missing = v1Entries.filter((e) => !inV2.has(e.manifestCid))
-      if (missing.length === 0) {
-        setRecoverState(`✓ Nothing to migrate (all ${v1Entries.length} v1 entries are already registered in v2)`)
-        return
-      }
-      let totalFee = 0n
-      for (let i = 0; i < missing.length; i++) {
-        const e = missing[i]
-        setRecoverState(`Migrating ${i + 1}/${missing.length}: ${e.name}…`)
-        const fee = await quoteRegisterFee(Number(e.size))
-        const reg = await registerFile(
-          evmSigner,
-          { manifestCid: e.manifestCid, height: Number(e.height), name: e.name, size: Number(e.size) },
-          { fee },
-        )
-        if (!reg.alreadyRegistered) totalFee += reg.fee ?? 0n
-      }
-      await refresh()
-      setRecoverState(`✓ v1 → v2 migration complete: ${missing.length} entries · dev fee ${(Number(totalFee) / 1e18).toFixed(4)} AI3`)
-    } catch (e) {
-      setRecoverState(`✗ ${(e as Error).message}`)
-    } finally {
-      setMigrating(false)
     }
   }
 
@@ -496,9 +443,6 @@ export function FilesPage() {
               disabled={!!recoverState && /Recovering/.test(recoverState)}
             >
               Recover from on-chain registry
-            </button>
-            <button className="btn ghost small" onClick={() => void migrateV1Registry()} disabled={migrating}>
-              Migrate from v1
             </button>
           </div>
           <input
