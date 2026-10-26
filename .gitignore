@@ -1,0 +1,28 @@
+# Node
+node_modules/
+*.log
+*.tsbuildinfo
+
+# Environment & secrets (never commit)
+.env
+.env.*
+!.env.sample
+*.pem
+*.key
+keystore*.json
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Vercel CLI local state
+.vercel/
+
+# Build & run artifacts (frontend dist, contract compile output, script manifests/samples)
+dist/
+build/
+out/
+coverage/
+.next/

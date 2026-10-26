@@ -1,0 +1,21 @@
+{
+  "auto-evm-mainnet": {
+    "chainId": 870,
+    "address": "0x1751f7534b85417da6e093a2e85b4b7b90ee2e4a",
+    "txHash": "0x4b83607fc1b6c9741e8356bd200e83f2b667795871067be630a4fead8bf4fe2e",
+    "blockNumber": "5266503",
+    "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "deployedAt": "2026-10-25T17:07:52.108Z"
+  },
+  "auto-evm-mainnet-v2": {
+    "chainId": 870,
+    "address": "0x79a22e5dc2e0613d8e9b491a1a51038b9197b185",
+    "txHash": "0x929508d18dd8494a808feae6806325c73cf108f8a3355910543ec43eecebb8f8",
+    "blockNumber": "5275049",
+    "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "treasury": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "feePerByte": "105245676421",
+    "minFee": "10000000000000000",
+    "deployedAt": "2026-10-26T11:29:15.059Z"
+  }
+}

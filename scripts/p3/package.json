@@ -1,0 +1,20 @@
+{
+  "name": "permadrive-p3",
+  "private": true,
+  "type": "module",
+  "description": "P3: FileRegistryV2 (dev fee) — compile/deploy/selftest/migrate on Auto-EVM mainnet (chainId 870)",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "compile": "node compile.mjs",
+    "deploy": "node deploy-v2.mjs",
+    "registry": "node registry-v2.mjs",
+    "selftest": "node registry-v2.mjs selftest",
+    "migrate-v1": "node migrate-v1.mjs"
+  },
+  "dependencies": {
+    "solc": "^0.8.28",
+    "viem": "^2.21.0"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "permadrive-verify",
+  "private": true,
+  "type": "module",
+  "description": "Read-only verification scripts for Autonomys public endpoints and on-chain fees",
+  "scripts": {
+    "rpc": "node rpc-check.mjs",
+    "indexer": "node indexer-check.mjs",
+    "fee": "node fee-estimate.mjs"
+  },
+  "dependencies": {
+    "@autonomys/auto-dag-data": "^1.6.16",
+    "@polkadot/api": "^16.0.0",
+    "multiformats": "^13.4.2",
+    "ws": "^8.18.0"
+  }
+}
