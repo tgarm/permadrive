@@ -80,6 +80,26 @@ export async function getEvmBalance(address: string): Promise<bigint> {
   return registryPublicClient().getBalance({ address: address as `0x${string}` })
 }
 
+/** Contract fee parameters (shown and compared on the About page; feePerByte is
+ * adjusted by the owner to follow the consensus-chain rate, MAX_FEE_PER_BYTE is
+ * the hard anti-rug cap) */
+export interface RegistryParams {
+  feePerByte: bigint
+  minFee: bigint
+  maxFeePerByte: bigint
+}
+
+export async function registryParams(): Promise<RegistryParams> {
+  const client = registryPublicClient()
+  const address = registryAddress()
+  const [feePerByte, minFee, maxFeePerByte] = await Promise.all(
+    (['feePerByte', 'minFee', 'MAX_FEE_PER_BYTE'] as const).map((f) =>
+      client.readContract({ address, abi: REGISTRY_ABI, functionName: f }),
+    ),
+  )
+  return { feePerByte, minFee, maxFeePerByte }
+}
+
 /** Register-fee quote for the v2 contract (max(minFee, size × feePerByte), in wei) */
 export async function quoteRegisterFee(size: number): Promise<bigint> {
   return registryPublicClient().readContract({

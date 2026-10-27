@@ -7,9 +7,10 @@ import { ThemeToggle } from './components/ThemeToggle'
 import { FilesPage } from './pages/FilesPage'
 import { NotesPage } from './pages/NotesPage'
 import { VaultPage } from './pages/VaultPage'
+import { AboutPage } from './pages/AboutPage'
 import { SettingsPage } from './pages/SettingsPage'
 
-type Tab = 'files' | 'notes' | 'vault' | 'settings'
+type Tab = 'files' | 'notes' | 'vault' | 'about' | 'settings'
 
 function Shell() {
   const [tab, setTab] = useState<Tab>('files')
@@ -38,6 +39,9 @@ function Shell() {
         <button className={tab === 'vault' ? 'tab active' : 'tab'} onClick={() => setTab('vault')}>
           Vault
         </button>
+        <button className={tab === 'about' ? 'tab active' : 'tab'} onClick={() => setTab('about')}>
+          About
+        </button>
         <button className={tab === 'settings' ? 'tab active' : 'tab'} onClick={() => setTab('settings')}>
           Settings
         </button>
@@ -49,6 +53,8 @@ function Shell() {
           <NotesPage />
         ) : tab === 'vault' ? (
           <VaultPage />
+        ) : tab === 'about' ? (
+          <AboutPage />
         ) : (
           <SettingsPage />
         )}
