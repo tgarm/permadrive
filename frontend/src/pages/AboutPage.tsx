@@ -153,7 +153,7 @@ export function AboutPage() {
         <p className="privacy-note">
           "My files" and notes are published in the clear (permanently public); private text belongs in the encrypted vault — principles and
           do-it-yourself verification in{' '}
-          <a href="./VAULT.md" target="_blank" rel="noreferrer noopener">
+          <a href="https://github.com/tgarm/permadrive/blob/main/VAULT.md" target="_blank" rel="noreferrer noopener">
             VAULT.md
           </a>
           .

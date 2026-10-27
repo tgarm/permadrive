@@ -551,3 +551,50 @@ textarea:focus {
   font-size: 12px;
   text-align: center;
 }
+
+/* ---- progressive disclosure ("?" expands an explanation) ---- */
+
+.hint {
+  display: inline-block;
+}
+
+.hint summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.hint summary::-webkit-details-marker {
+  display: none;
+}
+
+.hint summary:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.hint-body {
+  display: block;
+  margin: 8px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.hint-body a {
+  color: var(--accent);
+}

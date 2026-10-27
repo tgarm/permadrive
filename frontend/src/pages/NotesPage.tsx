@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useChain } from '../chain-context'
 import { useSigner } from '../signer-context'
+import { Hint } from '../components/Hint'
 import { formatBytes } from '../lib/bytes'
 import { newNoteId, noteFileName, parseNoteFileName, groupNoteEntries, titleFromSlug } from '../lib/notes'
 import { estimateFee, prepareUpload, publishPrepared, type PreparedUpload } from '../lib/publish'
@@ -356,7 +357,10 @@ export function NotesPage() {
               ))}
             </div>
           )}
-          <p className="privacy-note">The version history lives in the on-chain registry (FileRegistry v2, grouped by the pdnote- naming convention).</p>
+          <p className="privacy-note">
+            The version history lives in the on-chain registry and recovers automatically on a new device.
+            <Hint>The registry records every version grouped by note; the local store is only a draft cache — the on-chain record is authoritative.</Hint>
+          </p>
         </section>
 
         <section className="card">
@@ -369,11 +373,11 @@ export function NotesPage() {
                 {rowBusy && <span className="small-text row-status">{rowBusy}</span>}
               </div>
               <label className="field">
-                <span>Title (encoded into the filename, bound to the version once published)</span>
+                <span>Title</span>
                 <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Untitled" spellCheck={false} />
               </label>
               <label className="field">
-                <span>Content (Markdown plaintext, published in the clear — permanently public, no secrets)</span>
+                <span>Content</span>
                 <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={14} spellCheck={false} />
               </label>
               <div className="row">
@@ -384,6 +388,15 @@ export function NotesPage() {
                   Save local draft only
                 </button>
               </div>
+              <p className="privacy-note">
+                Published in the clear and permanently public — keep private content in the Vault.
+                <Hint>
+                  Every save = one new version: the content is packed and published + registered in the on-chain
+                  registry (small texts mostly pay the 0.01 AI3 floor). Saving unchanged content skips entirely
+                  (content addressing yields the same CID, zero cost). The version history lives on-chain, recovers
+                  automatically on a new device, and any version can be fetched for comparison.
+                </Hint>
+              </p>
 
               {session && (
                 <div className="upload-session">
@@ -405,7 +418,7 @@ export function NotesPage() {
                         <span>{session.devFee.ai3} AI3</span>
                       </div>
                       <p className="warning">
-                        Every version is permanently public and cannot be deleted (append-only); for small texts the cost is mostly the 0.01 AI3 registry floor.
+                        Every version is permanently public and cannot be deleted.
                       </p>
                       <div className="row">
                         <button className="btn primary" onClick={() => void confirmSave()}>

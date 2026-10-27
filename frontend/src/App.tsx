@@ -60,7 +60,7 @@ function Shell() {
         )}
       </main>
       <footer className="app-footer muted">
-        Files and texts are published on-chain via system.remark and archived permanently by the DSN farmer network · the manifest is your retrieval credential · the vault envelope only ever holds ciphertext — keep the keystore file offline
+        Data goes on-chain permanently and cannot be deleted · the vault only ever holds ciphertext
         <br />
         Part of the AI3.LAND toolset:
         <a href="https://xdm-bridge.ai3.land/" target="_blank" rel="noreferrer noopener">

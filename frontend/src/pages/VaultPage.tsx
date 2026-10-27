@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useChain } from '../chain-context'
 import { useSigner } from '../signer-context'
+import { Hint } from '../components/Hint'
 import { formatBytes } from '../lib/bytes'
 import { estimateFee, prepareUpload, publishPrepared, type PreparedUpload } from '../lib/publish'
 import { publishManifestToChain } from '../lib/manifestPublish'
@@ -413,12 +414,16 @@ export function VaultPage() {
         <section className="card">
           <h2>Create vault ({evm.address.slice(0, 10)}…)</h2>
           <p className="muted">
-            One vault per address. A random data key encrypts the whole entry set with AES-256-GCM before it goes on-chain (only ciphertext ever
-            reaches the chain); unlocking uses the EVM wallet signature (bound automatically) and/or the keystore file. Set the keystore passphrase
-            first:
+            Entries are encrypted before they go on-chain permanently (only ciphertext ever reaches the chain). Set a recovery passphrase:
+            <Hint>
+              In brief: a random data key encrypts all entries, and the key itself is wrapped by two independent channels — your passphrase and your
+              wallet signature. Everyday unlocking is just a wallet signature; if the wallet is lost, the keystore file + passphrase recover
+              everything. Full principles and do-it-yourself verification:{' '}
+              <a href="https://github.com/tgarm/permadrive/blob/main/VAULT.md" target="_blank" rel="noreferrer noopener">VAULT.md</a>.
+            </Hint>
           </p>
           <label className="field">
-            <span>Keystore passphrase (≥8 chars, encrypts the exported keystore — the only recovery credential if the wallet is lost)</span>
+            <span>Recovery passphrase (≥8 chars, encrypts the keystore file)</span>
             <input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} />
           </label>
           <label className="field">
@@ -442,8 +447,8 @@ export function VaultPage() {
         <section className="card">
           <h2>Download the keystore file (required)</h2>
           <p className="warning">
-            The keystore is the vault's only recovery path that does not depend on the wallet: a new device, a lost wallet, cleared browser data —
-            all recover with "keystore + passphrase". It contains the data key encrypted under the passphrase — store it offline and carefully.
+            This file is the only recovery path if the wallet is lost — store it offline and carefully (it is already encrypted under your
+            passphrase; a leaked file does not leak entries).
           </p>
           <div className="row">
             <button
@@ -456,7 +461,7 @@ export function VaultPage() {
             </button>
             <label className="row" style={{ marginTop: 0 }}>
               <input type="checkbox" checked={keystoreSaved} onChange={(e) => setKeystoreSaved(e.target.checked)} />
-              <span className="small-text">I have stored it safely (losing it removes the keystore path; only the wallet-signature channel remains)</span>
+              <span className="small-text">I have stored it safely (losing it leaves only the wallet-signature unlock)</span>
             </label>
             <button className="btn" onClick={finishKeystore} disabled={!keystoreSaved}>
               Done
@@ -470,8 +475,7 @@ export function VaultPage() {
         <section className="card">
           <h2>Vault locked ({record.address.slice(0, 10)}… · {record.versions.length} on-chain version{record.versions.length === 1 ? '' : 's'})</h2>
           <p className="muted small-text" style={{ marginTop: 0 }}>
-            Unlocking = signing one fixed message with your EVM wallet; the decryption key is derived locally — the private key never leaves the
-            wallet, no passphrase needed, no transaction.
+            Unlock with one EVM wallet signature — no passphrase, no transaction.
           </p>
           <div className="row">
             <button className="btn primary" onClick={() => void unlockWithWallet()} disabled={!!busy}>
@@ -534,8 +538,11 @@ export function VaultPage() {
             </div>
           </div>
           <p className="privacy-note" style={{ margin: '0 0 10px' }}>
-            Entries live only in this page's memory (locked on refresh, never written to local storage); publishing stores the full encrypted
-            envelope — no plaintext on-chain.
+            Entries live only in this page's memory (locked on refresh); only ciphertext goes on-chain.
+            <Hint>
+              Encryption happens in your browser: a random data key encrypts all entries, and the key — wrapped by your passphrase/wallet signature —
+              is published alongside the ciphertext. Nobody (including us) can read the entries from the on-chain data alone.
+            </Hint>
           </p>
 
           {draft && (
@@ -681,8 +688,7 @@ export function VaultPage() {
                     <span>{session.devFee.ai3} AI3</span>
                   </div>
                   <p className="warning">
-                    What gets published is always the full ciphertext envelope (no plaintext on-chain); every save creates a new permanent version
-                    (containing all entries' ciphertext).
+                    Every save creates a new permanent ciphertext version.
                   </p>
                   <div className="row">
                     <button className="btn primary" onClick={() => void confirmSave()}>

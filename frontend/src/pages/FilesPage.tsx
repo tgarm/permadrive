@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useChain } from '../chain-context'
 import { useSigner } from '../signer-context'
+import { Hint } from '../components/Hint'
 import { formatBytes } from '../lib/bytes'
 import { loadConfig } from '../lib/config'
 import { migrateManifest, type ManifestV1 } from '../lib/manifest'
@@ -395,10 +396,7 @@ export function FilesPage() {
                   <span>On-chain fee (estimate)</span>
                   <span>≈ {upload.fee.ai3.toFixed(4)} AI3</span>
                 </div>
-                <p className="warning">
-                  Publishing to the chain is permanent and public: anyone can read the content and it cannot be
-                  deleted. Encryption is not supported yet, so do not upload private files.
-                </p>
+                <p className="warning">Publishing is permanent and public — keep private content in the Vault.</p>
                 <div className="row">
                   <button className="btn primary" onClick={() => void confirmUpload()}>
                     Sign and upload
@@ -425,8 +423,16 @@ export function FilesPage() {
         )}
 
         <p className="privacy-note">
-          "My Files" is about index ownership (you sign the publication, you hold the manifest), not access control —
-          on-chain data is readable by anyone by default.
+          Once published, anyone can read it and it cannot be deleted.
+          <Hint>
+            "Sync to registry" registers the file into your on-chain registry (a small registration fee per file, about
+            10% of the storage fee with a 0.01 AI3 floor); on a new device, connect the same wallet and click "Recover
+            from registry" to restore the file list.
+            <br />
+            Registering is optional — the file itself can always be fetched for free with its manifest or by scanning
+            the chain. A manifest is a self-contained retrieval credential (it locates every data block); export it and
+            any device can use it. Cost comparison on the About page.
+          </Hint>
         </p>
       </section>
 
@@ -530,10 +536,13 @@ export function FilesPage() {
           </table>
         )}
         <p className="privacy-note">
-          The on-chain registry (FileRegistry v2) holds your manifest collection — connect the same EVM wallet on
-          another device to recover the file list. The registry is index ownership, not access control. Registry
-          registration charges a dev fee (≈5% of the on-chain storage fee estimate, 0.01 AI3 minimum); skipping
-          registration does not affect retrieving the data itself from the chain.
+          The on-chain registry holds your file list — connect the same wallet on a new device to recover it in one click.
+          <Hint>
+            The registry is a public index (which wallet registered which files), not access control: published data
+            itself is readable by anyone. Registration charges a dev fee (≈10% of the on-chain storage fee, 0.01 AI3
+            floor) that funds the maintenance of the public frontend and tooling; skipping registration does not affect
+            retrieving the data itself from the chain.
+          </Hint>
         </p>
       </section>
     </div>
