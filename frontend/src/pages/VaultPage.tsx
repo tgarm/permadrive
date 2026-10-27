@@ -35,6 +35,7 @@ import {
   vaultSignMessage,
   type VaultEntry,
 } from '../lib/vault'
+import { nodeCount, useI18n } from '../i18n'
 
 const PW_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
 
@@ -77,6 +78,7 @@ interface EntryDraft {
 const EMPTY_DRAFT: EntryDraft = { id: null, title: '', username: '', password: '', url: '', notes: '' }
 
 export function VaultPage() {
+  const { t } = useI18n()
   const { connect } = useChain()
   const { active, evm } = useSigner()
   const [record, setRecord] = useState<VaultRecord | null>(null)
@@ -149,20 +151,20 @@ export function VaultPage() {
     setNotice(null)
     if (!evm) return
     if (passphrase.length < 8) {
-      setNotice('✗ passphrase needs at least 8 characters (it encrypts the keystore file; without it the keystore is just a file)')
+      setNotice(t('vault.passShort'))
       return
     }
     if (passphrase !== passphrase2) {
-      setNotice('✗ passphrases do not match')
+      setNotice(t('vault.passMismatch'))
       return
     }
-    setBusy('generating the data key and envelope…')
+    setBusy(t('vault.generating'))
     try {
       // The signature wrap is best-effort: refusing to sign in the injected
       // wallet still allows creation (the passphrase channel remains)
       let signature: Uint8Array | null = null
       try {
-        setBusy('wallet signature (binds the unlock channel to this wallet; may be declined)…')
+        setBusy(t('vault.signingBind'))
         signature = await signEvmMessage(evm, vaultSignMessage(evm.address))
       } catch {
         signature = null
@@ -177,7 +179,7 @@ export function VaultPage() {
       setPassphrase('')
       setPassphrase2('')
       await refresh()
-      setNotice('✓ vault created (locally). "Save on-chain" after adding entries creates the on-chain versions.')
+      setNotice(t('vault.createdLocal'))
     } catch (e) {
       setNotice(`✗ ${(e as Error).message}`)
     } finally {
@@ -195,11 +197,11 @@ export function VaultPage() {
   const unlockWithWallet = async () => {
     if (!evm || !record) return
     setUnlockError(null)
-    setBusy('waiting for wallet signature…')
+    setBusy(t('stage.signing'))
     try {
       const key = await unlockVaultWithSignature(record.envelope, evm)
       if (!key) {
-        setUnlockError('this envelope has no signature channel bound to this wallet, or the wallet signature is not reproducible — use the keystore file instead')
+        setUnlockError(t('vault.noSignatureChannel'))
         return
       }
       await openWithKey(key, record.envelope)
@@ -214,19 +216,19 @@ export function VaultPage() {
     if (!record) return
     setUnlockError(null)
     if (!keystoreFile) {
-      setUnlockError('✗ pick the keystore file first')
+      setUnlockError(t('vault.pickKeystoreFirst'))
       return
     }
     if (keystoreFile.address !== record.address) {
-      setUnlockError(`✗ keystore owner mismatch (${keystoreFile.address.slice(0, 10)}… ≠ ${record.address.slice(0, 10)}…)`)
+      setUnlockError(t('vault.keystoreMismatch', [keystoreFile.address.slice(0, 10), record.address.slice(0, 10)]))
       return
     }
-    setBusy('decrypting the keystore…')
+    setBusy(t('vault.decrypting'))
     try {
       const key = await unwrapWithPassphrase(keystoreFile.wrapped, unlockPass)
       await openWithKey(key, record.envelope)
     } catch {
-      setUnlockError('✗ wrong passphrase or corrupted keystore')
+      setUnlockError(t('vault.wrongPassphrase'))
     } finally {
       setBusy(null)
     }
@@ -245,7 +247,7 @@ export function VaultPage() {
   const saveDraft = () => {
     if (!entries || !draft) return
     if (!draft.title.trim()) {
-      setNotice('✗ an entry needs at least a title')
+      setNotice(t('vault.needEntryTitle'))
       return
     }
     const now = Date.now()
@@ -260,7 +262,7 @@ export function VaultPage() {
 
   const removeEntry = (id: string) => {
     if (!entries) return
-    if (!window.confirm('Delete this entry? (takes effect with the next on-chain save; the old envelope version keeps it permanently)')) return
+    if (!window.confirm(t('vault.deleteEntryConfirm'))) return
     setEntries(entries.filter((e) => e.id !== id))
   }
 
@@ -270,11 +272,11 @@ export function VaultPage() {
     setNotice(null)
     if (!entries || !vaultKey || !record) return
     if (JSON.stringify(entries) === lastSealed) {
-      setNotice('✓ entries unchanged since the last seal, no new version needed')
+      setNotice(t('vault.unchangedSinceSeal'))
       return
     }
     if (!active || !evm) {
-      setNotice('✗ needs a Substrate signer (publishing) and an EVM signer (registry)')
+      setNotice(t('common.needSigners'))
       return
     }
     setSession({ stage: 'packing' })
@@ -304,15 +306,20 @@ export function VaultPage() {
     try {
       const api = await connect()
       const manifest = await publishPrepared(api, s.prepared, active, (stage, detail) => {
-        const text = { signing: 'waiting for wallet signature…', submitting: 'submitted, waiting for a block…', scanning: 'scanning for the tx…', confirming: 'waiting for confirmations (12 blocks)…' }[stage] ?? stage
+        const text = {
+          signing: t('stage.signing'),
+          submitting: t('stage.submitting'),
+          scanning: t('stage.scanning'),
+          confirming: t('stage.confirming'),
+        }[stage] ?? stage
         setSession((cur) => (cur ? { ...cur, stage: 'publishing', detail: detail ? `${text} ${detail}` : text } : cur))
       })
       await putManifest(manifest)
-      setSession((cur) => (cur ? { ...cur, detail: 'publishing manifest file…' } : cur))
+      setSession((cur) => (cur ? { ...cur, detail: t('stage.manifestPublishing') } : cur))
       const publication = await publishManifestToChain(api, manifest, active, (_stage, detail) =>
         setSession((cur) => (cur ? { ...cur, stage: 'publishing', detail } : cur)),
       )
-      setSession((cur) => (cur ? { ...cur, detail: `registering (dev fee ${s.devFee!.ai3} AI3)…` } : cur))
+      setSession((cur) => (cur ? { ...cur, detail: t('files.registering', [s.devFee!.ai3]) } : cur))
       await registerFile(
         evm,
         { manifestCid: publication.manifestCid, height: publication.height, name: manifest.file.name, size: s.prepared.file.size },
@@ -335,7 +342,7 @@ export function VaultPage() {
       await putVault(updated)
       setLastSealed(JSON.stringify(entries))
       setSession(null)
-      setNotice(`✓ envelope v${updated.versions.length} published: block #${manifest.txs[0].height} · dev fee ${s.devFee.ai3} AI3`)
+      setNotice(t('vault.publishedEnvelope', [updated.versions.length, manifest.txs[0].height, s.devFee.ai3]))
       await refresh()
     } catch (e) {
       setSession((cur) => (cur ? { ...cur, stage: 'error', error: (e as Error).message } : cur))
@@ -347,7 +354,7 @@ export function VaultPage() {
   const recoverFromRegistry = async () => {
     setNotice(null)
     if (!evm) return
-    setBusy('reading the on-chain registry…')
+    setBusy(t('vault.readingRegistry'))
     try {
       const registryEntries = await fetchEntries(evm.address)
       // Ascending (growing height = version order), matching the publish-side
@@ -356,17 +363,17 @@ export function VaultPage() {
         .filter((e) => parseVaultFileName(e.name) !== null)
         .sort((a, b) => a.height - b.height)
       if (vaultEntries.length === 0) {
-        setNotice(`no vault entries in the registry (${registryEntries.length} registrations total)`)
+        setNotice(t('vault.noVaultEntries', [registryEntries.length]))
         return
       }
       const api = await connect()
       const latest = vaultEntries[vaultEntries.length - 1]
-      setBusy(`fetching the latest envelope (block #${latest.height})…`)
+      setBusy(t('vault.fetchingEnvelope', [latest.height]))
       const manifest = await recoverManifestFromHint(api, latest.manifestCid, latest.height)
       await putManifest(manifest)
       const result = await retrieveFile(api, manifest)
       const envelope = parseEnvelope(JSON.parse(new TextDecoder().decode(result.bytes)))
-      if (envelope.address !== evm.address.toLowerCase()) throw new Error('envelope owner does not match the current EVM address')
+      if (envelope.address !== evm.address.toLowerCase()) throw new Error(t('errors.envelopeOwnerMismatch'))
       const versions: VaultVersionRecord[] = vaultEntries.map((e) => ({
         rootCid: e.manifestCid === latest.manifestCid ? manifest.rootCid : '',
         manifestCid: e.manifestCid,
@@ -378,7 +385,7 @@ export function VaultPage() {
       await putVault({ address: evm.address, envelope, versions, createdAt: envelope.createdAt })
       await refresh()
       lock()
-      setNotice(`✓ recovered ${versions.length} on-chain version${versions.length === 1 ? '' : 's'} (latest envelope fetched) — please unlock`)
+      setNotice(t('vault.recovered', [t(versions.length === 1 ? 'common.oneOnChainVersion' : 'common.nOnChainVersions', [versions.length])]))
     } catch (e) {
       setNotice(`✗ ${(e as Error).message}`)
     } finally {
@@ -392,8 +399,8 @@ export function VaultPage() {
     return (
       <div className="page">
         <section className="card">
-          <h2>Vault</h2>
-          <p className="muted">Vaults are namespaced by EVM address — connect an EVM signer first (extension wallet or local key) in the header.</p>
+          <h2>{t('vault.title')}</h2>
+          <p className="muted">{t('vault.needEvm')}</p>
         </section>
       </div>
     )
@@ -412,30 +419,31 @@ export function VaultPage() {
       {/* create (no local record yet) */}
       {!record && !keystorePending && (
         <section className="card">
-          <h2>Create vault ({evm.address.slice(0, 10)}…)</h2>
+          <h2>{t('vault.createTitle', [evm.address.slice(0, 10)])}</h2>
           <p className="muted">
-            Entries are encrypted before they go on-chain permanently (only ciphertext ever reaches the chain). Set a recovery passphrase:
+            {t('vault.createIntro')}
             <Hint>
-              In brief: a random data key encrypts all entries, and the key itself is wrapped by two independent channels — your passphrase and your
-              wallet signature. Everyday unlocking is just a wallet signature; if the wallet is lost, the keystore file + passphrase recover
-              everything. Full principles and do-it-yourself verification:{' '}
-              <a href="https://github.com/tgarm/permadrive/blob/main/VAULT.md" target="_blank" rel="noreferrer noopener">VAULT.md</a>.
+              {t('vault.createHint')}{' '}
+              <a href="https://github.com/tgarm/permadrive/blob/main/VAULT.md" target="_blank" rel="noreferrer noopener">
+                VAULT.md
+              </a>
+              .
             </Hint>
           </p>
           <label className="field">
-            <span>Recovery passphrase (≥8 chars, encrypts the keystore file)</span>
+            <span>{t('vault.passphraseLabel')}</span>
             <input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} />
           </label>
           <label className="field">
-            <span>Repeat passphrase</span>
+            <span>{t('vault.passphraseRepeat')}</span>
             <input type="password" value={passphrase2} onChange={(e) => setPassphrase2(e.target.value)} />
           </label>
           <div className="row">
             <button className="btn primary" onClick={() => void createVault()} disabled={!!busy}>
-              Create and bind wallet
+              {t('vault.createBtn')}
             </button>
             <button className="btn ghost" onClick={() => void recoverFromRegistry()} disabled={!!busy}>
-              Recover from registry
+              {t('vault.recoverBtn')}
             </button>
             {busy && <span className="stage-line" style={{ marginTop: 0 }}>{busy}</span>}
           </div>
@@ -445,11 +453,8 @@ export function VaultPage() {
       {/* forced keystore export */}
       {keystorePending && (
         <section className="card">
-          <h2>Download the keystore file (required)</h2>
-          <p className="warning">
-            This file is the only recovery path if the wallet is lost — store it offline and carefully (it is already encrypted under your
-            passphrase; a leaked file does not leak entries).
-          </p>
+          <h2>{t('vault.keystoreTitle')}</h2>
+          <p className="warning">{t('vault.keystoreWarning')}</p>
           <div className="row">
             <button
               className="btn primary"
@@ -457,14 +462,14 @@ export function VaultPage() {
                 saveBlob(new TextEncoder().encode(JSON.stringify(keystorePending, null, 2)), `permadrive-keystore-${evm.address.slice(2, 10)}.json`, 'application/json')
               }
             >
-              Download keystore
+              {t('vault.downloadKeystore')}
             </button>
             <label className="row" style={{ marginTop: 0 }}>
               <input type="checkbox" checked={keystoreSaved} onChange={(e) => setKeystoreSaved(e.target.checked)} />
-              <span className="small-text">I have stored it safely (losing it leaves only the wallet-signature unlock)</span>
+              <span className="small-text">{t('vault.keystoreSaved')}</span>
             </label>
             <button className="btn" onClick={finishKeystore} disabled={!keystoreSaved}>
-              Done
+              {t('vault.done')}
             </button>
           </div>
         </section>
@@ -473,21 +478,26 @@ export function VaultPage() {
       {/* locked */}
       {record && !unlocked && !keystorePending && (
         <section className="card">
-          <h2>Vault locked ({record.address.slice(0, 10)}… · {record.versions.length} on-chain version{record.versions.length === 1 ? '' : 's'})</h2>
+          <h2>
+            {t('vault.lockedTitle', [
+              record.address.slice(0, 10),
+              t(record.versions.length === 1 ? 'common.oneOnChainVersion' : 'common.nOnChainVersions', [record.versions.length]),
+            ])}
+          </h2>
           <p className="muted small-text" style={{ marginTop: 0 }}>
-            Unlock with one EVM wallet signature — no passphrase, no transaction.
+            {t('vault.lockedIntro')}
           </p>
           <div className="row">
             <button className="btn primary" onClick={() => void unlockWithWallet()} disabled={!!busy}>
-              Unlock with wallet signature
+              {t('vault.unlockWallet')}
             </button>
             <button className="btn ghost" onClick={() => void recoverFromRegistry()} disabled={!!busy}>
-              Recover from registry
+              {t('vault.recoverBtn')}
             </button>
             {busy && <span className="stage-line" style={{ marginTop: 0 }}>{busy}</span>}
           </div>
           <div className="divider" />
-          <p className="muted small-text">If the wallet is unavailable (new wallet / some extension wallets sign non-reproducibly), unlock with the keystore file exported at creation + your passphrase:</p>
+          <p className="muted small-text">{t('vault.keystoreFallbackIntro')}</p>
           <div className="row" style={{ marginTop: 4 }}>
             <input
               type="file"
@@ -498,8 +508,8 @@ export function VaultPage() {
                 if (!f) return
                 void f
                   .text()
-                  .then((t) => setKeystoreFile(parseKeystoreFile(JSON.parse(t))))
-                  .catch(() => setUnlockError('✗ keystore file parse failed'))
+                  .then((txt) => setKeystoreFile(parseKeystoreFile(JSON.parse(txt))))
+                  .catch(() => setUnlockError(t('vault.keystoreParseFailed')))
               }}
             />
           </div>
@@ -508,11 +518,11 @@ export function VaultPage() {
               type="password"
               value={unlockPass}
               onChange={(e) => setUnlockPass(e.target.value)}
-              placeholder="keystore passphrase"
+              placeholder={t('vault.keystorePassphrase')}
               style={{ width: 220 }}
             />
             <button className="btn" onClick={() => void unlockWithKeystore()} disabled={!!busy || !keystoreFile}>
-              Unlock with keystore
+              {t('vault.unlockKeystore')}
             </button>
             {keystoreFile && <span className="ok small-text">✓ {keystoreFile.address.slice(0, 10)}…</span>}
           </div>
@@ -524,62 +534,59 @@ export function VaultPage() {
       {record && unlocked && entries && (
         <section className="card">
           <div className="card-head">
-            <h2>Entries ({entries.length})</h2>
+            <h2>{t('vault.entriesTitle', [entries.length])}</h2>
             <div className="row-actions">
               <button className="btn ghost small" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
-                Add entry
+                {t('vault.addEntry')}
               </button>
               <button className="btn primary small" onClick={() => void requestSave()}>
-                Save on-chain
+                {t('vault.saveOnChain')}
               </button>
               <button className="btn ghost small" onClick={lock}>
-                Lock
+                {t('vault.lock')}
               </button>
             </div>
           </div>
           <p className="privacy-note" style={{ margin: '0 0 10px' }}>
-            Entries live only in this page's memory (locked on refresh); only ciphertext goes on-chain.
-            <Hint>
-              Encryption happens in your browser: a random data key encrypts all entries, and the key — wrapped by your passphrase/wallet signature —
-              is published alongside the ciphertext. Nobody (including us) can read the entries from the on-chain data alone.
-            </Hint>
+            {t('vault.privacyMemory')}
+            <Hint>{t('vault.hintEncryption')}</Hint>
           </p>
 
           {draft && (
             <div className="entry-form">
               <label className="field">
-                <span>Title *</span>
+                <span>{t('vault.fieldTitle')}</span>
                 <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
               </label>
               <div className="entry-form-grid">
                 <label className="field">
-                  <span>Username</span>
+                  <span>{t('vault.fieldUsername')}</span>
                   <input value={draft.username} onChange={(e) => setDraft({ ...draft, username: e.target.value })} spellCheck={false} />
                 </label>
                 <label className="field">
-                  <span>Password</span>
+                  <span>{t('vault.fieldPassword')}</span>
                   <div className="row" style={{ marginTop: 0 }}>
                     <input value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} spellCheck={false} />
                     <button className="btn ghost small" onClick={() => setDraft({ ...draft, password: generatePassword() })}>
-                      Generate
+                      {t('vault.generate')}
                     </button>
                   </div>
                 </label>
               </div>
               <label className="field">
-                <span>URL</span>
+                <span>{t('vault.fieldUrl')}</span>
                 <input value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })} spellCheck={false} />
               </label>
               <label className="field">
-                <span>Notes</span>
+                <span>{t('vault.fieldNotes')}</span>
                 <textarea value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} rows={3} />
               </label>
               <div className="row" style={{ marginTop: 0 }}>
                 <button className="btn primary small" onClick={saveDraft}>
-                  {draft.id ? 'Update entry (in memory)' : 'Add entry (in memory)'}
+                  {draft.id ? t('vault.updateEntryMem') : t('vault.addEntryMem')}
                 </button>
                 <button className="btn ghost small" onClick={() => setDraft(null)}>
-                  Cancel
+                  {t('common.cancel')}
                 </button>
               </div>
               <div className="divider" />
@@ -587,16 +594,16 @@ export function VaultPage() {
           )}
 
           {entries.length === 0 ? (
-            <p className="muted">No entries yet. Click "Add entry", then "Save on-chain".</p>
+            <p className="muted">{t('vault.emptyEntries')}</p>
           ) : (
             <table className="files-table">
               <thead>
                 <tr>
-                  <th>Title</th>
-                  <th>Username</th>
-                  <th>Password</th>
-                  <th>Updated</th>
-                  <th>Actions</th>
+                  <th>{t('vault.thTitle')}</th>
+                  <th>{t('vault.thUsername')}</th>
+                  <th>{t('vault.thPassword')}</th>
+                  <th>{t('vault.thUpdated')}</th>
+                  <th>{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -616,7 +623,7 @@ export function VaultPage() {
                         <span className="mono small-text">{entry.username || '—'}</span>
                         {entry.username && (
                           <button className="btn link" onClick={() => copy(entry.username, `${entry.id}:u`)}>
-                            {copied === `${entry.id}:u` ? '✓' : 'Copy'}
+                            {copied === `${entry.id}:u` ? '✓' : t('common.copy')}
                           </button>
                         )}
                       </div>
@@ -625,15 +632,15 @@ export function VaultPage() {
                       <div className="pw-cell">
                         <span className="mono small-text">{revealed.has(entry.id) ? entry.password : '••••••••'}</span>
                         <button className="btn link" onClick={() => setRevealed(new Set([...revealed, entry.id]))}>
-                          {revealed.has(entry.id) ? '' : 'Show'}
+                          {revealed.has(entry.id) ? '' : t('vault.show')}
                         </button>
                         {revealed.has(entry.id) && (
                           <>
                             <button className="btn link" onClick={() => copy(entry.password, `${entry.id}:p`)}>
-                              {copied === `${entry.id}:p` ? '✓' : 'Copy'}
+                              {copied === `${entry.id}:p` ? '✓' : t('common.copy')}
                             </button>
                             <button className="btn link" onClick={() => setRevealed(new Set([...revealed].filter((x) => x !== entry.id)))}>
-                              Hide
+                              {t('vault.hide')}
                             </button>
                           </>
                         )}
@@ -655,10 +662,10 @@ export function VaultPage() {
                             })
                           }
                         >
-                          Edit
+                          {t('common.edit')}
                         </button>
                         <button className="btn ghost small danger" onClick={() => removeEntry(entry.id)}>
-                          Delete
+                          {t('common.delete')}
                         </button>
                       </div>
                     </td>
@@ -673,29 +680,26 @@ export function VaultPage() {
               {session.stage === 'awaiting-confirm' && session.prepared && session.fee && session.devFee ? (
                 <div className="confirm-panel">
                   <div className="kv">
-                    <span>Envelope version</span>
+                    <span>{t('vault.envelopeVersion')}</span>
                     <span>
-                      v{record.versions.length + 1} · {session.prepared.nodes.length} node{session.prepared.nodes.length === 1 ? '' : 's'} ·{' '}
-                      {formatBytes(session.prepared.totalBytes)}
+                      v{record.versions.length + 1} · {nodeCount(session.prepared.nodes.length)} · {formatBytes(session.prepared.totalBytes)}
                     </span>
                   </div>
                   <div className="kv fee">
-                    <span>On-chain storage fee (estimate)</span>
+                    <span>{t('common.storageFeeEstimate')}</span>
                     <span>≈ {session.fee.ai3.toFixed(4)} AI3</span>
                   </div>
                   <div className="kv fee">
-                    <span>Registry dev fee</span>
+                    <span>{t('common.registryDevFee')}</span>
                     <span>{session.devFee.ai3} AI3</span>
                   </div>
-                  <p className="warning">
-                    Every save creates a new permanent ciphertext version.
-                  </p>
+                  <p className="warning">{t('vault.warningCiphertext')}</p>
                   <div className="row">
                     <button className="btn primary" onClick={() => void confirmSave()}>
-                      Sign and publish
+                      {t('common.signAndPublish')}
                     </button>
                     <button className="btn ghost" onClick={() => setSession(null)}>
-                      Cancel
+                      {t('common.cancel')}
                     </button>
                   </div>
                 </div>
@@ -703,24 +707,27 @@ export function VaultPage() {
                 <div>
                   <div className="error-text">{session.error}</div>
                   <button className="btn ghost small" onClick={() => setSession(null)}>
-                    Close
+                    {t('common.close')}
                   </button>
                 </div>
               ) : (
-                <div className="stage-line">publishing…{session.detail ? <span className="muted"> · {session.detail}</span> : null}</div>
+                <div className="stage-line">
+                  {t('stage.publishing')}
+                  {session.detail ? <span className="muted"> · {session.detail}</span> : null}
+                </div>
               )}
             </div>
           )}
 
           {record.versions.length > 0 && (
             <>
-              <h2 style={{ marginTop: 18, fontSize: 14 }}>On-chain versions ({record.versions.length})</h2>
+              <h2 style={{ marginTop: 18, fontSize: 14 }}>{t('vault.onChainVersions', [record.versions.length])}</h2>
               <table className="files-table">
                 <thead>
                   <tr>
-                    <th>Version</th>
-                    <th>Size</th>
-                    <th>Published</th>
+                    <th>{t('vault.thVersion')}</th>
+                    <th>{t('common.size')}</th>
+                    <th>{t('vault.thPublished')}</th>
                     <th>manifest CID</th>
                   </tr>
                 </thead>

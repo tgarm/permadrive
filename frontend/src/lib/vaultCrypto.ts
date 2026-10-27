@@ -19,6 +19,7 @@
 // retrieval pipeline needs zero changes and the manifest keeps encryption: null.
 
 import { fromHex, toHex } from './bytes'
+import { t } from '../i18n'
 
 export interface WrappedKey {
   mode: 'signature-v1' | 'passphrase-v1'
@@ -142,7 +143,7 @@ export async function wrapKeyWithPassphrase(vaultKey: Uint8Array, passphrase: st
 
 /** Wrong passphrase → GCM auth fails and throws (the keystore unlock path's error exit) */
 export async function unwrapWithPassphrase(wrapped: WrappedKey, passphrase: string): Promise<Uint8Array> {
-  if (wrapped.mode !== 'passphrase-v1' || !wrapped.kdf) throw new Error('not a passphrase-wrapped key')
+  if (wrapped.mode !== 'passphrase-v1' || !wrapped.kdf) throw new Error(t('errors.keystoreNotPassphraseWrapped'))
   const kek = await pbkdf2Sha256(passphrase, fromHex(wrapped.kdf.salt), wrapped.kdf.iterations)
   return aesGcmDecrypt(kek, fromHex(wrapped.iv), fromHex(wrapped.ct))
 }
@@ -157,6 +158,6 @@ export async function sealPayload(vaultKey: Uint8Array, plaintextJson: string): 
 
 /** Auth failure (wrong K / tampered ciphertext) throws */
 export async function openPayload(vaultKey: Uint8Array, cipher: VaultCipher): Promise<string> {
-  if (cipher.alg !== 'AES-256-GCM') throw new Error(`unknown envelope cipher: ${cipher.alg}`)
+  if (cipher.alg !== 'AES-256-GCM') throw new Error(t('errors.envelopeUnknownAlg', [cipher.alg]))
   return dec.decode(await aesGcmDecrypt(vaultKey, fromHex(cipher.iv), fromHex(cipher.ct)))
 }

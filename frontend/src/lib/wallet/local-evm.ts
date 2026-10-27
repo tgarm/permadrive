@@ -9,5 +9,6 @@ import type { EvmSigner } from './types'
 
 export async function createLocalEvmSigner(mnemonic: string): Promise<EvmSigner> {
   const account = mnemonicToAccount(mnemonic.trim())
-  return { kind: 'local', address: account.address, account, label: 'EVM Local key (dev)' }
+  // the label is a stable identifier (not copy); WalletBar maps it to a display name in the active locale
+  return { kind: 'local', address: account.address, account, label: 'local' }
 }

@@ -108,6 +108,14 @@ body {
   flex-shrink: 0;
 }
 
+/* Language select (options are self-named, width follows content) */
+
+.lang-select {
+  flex-shrink: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
 /* ---- wallet bar ---- */
 
 .wallet-bar {

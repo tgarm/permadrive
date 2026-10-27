@@ -5,6 +5,7 @@
 // valid for all versions; wrappedKeys carry over unchanged across versions).
 
 import { fromHex } from './bytes'
+import { t } from '../i18n'
 import {
   sealPayload,
   tryUnwrapWithSignature,
@@ -88,21 +89,21 @@ export async function resealVaultEnvelope(prev: VaultEnvelopeV1, entries: VaultE
 /** Envelope JSON structural validation (data recovered from chain is untrusted); throws when invalid */
 export function parseEnvelope(raw: unknown): VaultEnvelopeV1 {
   const v = raw as Partial<VaultEnvelopeV1> | null
-  if (typeof v !== 'object' || v === null) throw new Error('envelope is not a JSON object')
-  if (v.v !== 1 || v.kind !== 'permadrive-vault') throw new Error('not a PermaDrive vault envelope (v1)')
+  if (typeof v !== 'object' || v === null) throw new Error(t('errors.envelopeNotJson'))
+  if (v.v !== 1 || v.kind !== 'permadrive-vault') throw new Error(t('errors.notEnvelope'))
   if (typeof v.address !== 'string' || typeof v.createdAt !== 'number' || typeof v.updatedAt !== 'number')
-    throw new Error('envelope fields incomplete')
+    throw new Error(t('errors.envelopeIncomplete'))
   if (!v.cipher || v.cipher.alg !== 'AES-256-GCM' || typeof v.cipher.iv !== 'string' || typeof v.cipher.ct !== 'string')
-    throw new Error('envelope ciphertext fields invalid')
-  if (!Array.isArray(v.wrappedKeys) || v.wrappedKeys.length === 0) throw new Error('envelope has no key-wrap channels')
+    throw new Error(t('errors.envelopeCipherInvalid'))
+  if (!Array.isArray(v.wrappedKeys) || v.wrappedKeys.length === 0) throw new Error(t('errors.envelopeNoWrapChannels'))
   return v as VaultEnvelopeV1
 }
 
 /** keystore JSON validation (import path); owner mismatch is compared by the caller */
 export function parseKeystoreFile(raw: unknown): KeystoreFileV1 {
   const v = raw as Partial<KeystoreFileV1> | null
-  if (typeof v !== 'object' || v === null || v.v !== 1 || v.kind !== 'permadrive-keystore') throw new Error('not a PermaDrive keystore file')
-  if (typeof v.address !== 'string' || !v.wrapped || v.wrapped.mode !== 'passphrase-v1') throw new Error('keystore file fields invalid')
+  if (typeof v !== 'object' || v === null || v.v !== 1 || v.kind !== 'permadrive-keystore') throw new Error(t('errors.notKeystore'))
+  if (typeof v.address !== 'string' || !v.wrapped || v.wrapped.mode !== 'passphrase-v1') throw new Error(t('errors.keystoreFieldsInvalid'))
   return v as KeystoreFileV1
 }
 
@@ -123,6 +124,6 @@ export async function unlockVaultWithSignature(envelope: VaultEnvelopeV1, signer
 /** Entry payload (decrypted from the envelope cipher) → structural validation */
 export function parseVaultEntries(plaintextJson: string): VaultEntry[] {
   const parsed = JSON.parse(plaintextJson) as { entries?: unknown }
-  if (!parsed || !Array.isArray(parsed.entries)) throw new Error('envelope payload structure invalid (missing entries)')
+  if (!parsed || !Array.isArray(parsed.entries)) throw new Error(t('errors.payloadInvalid'))
   return parsed.entries as VaultEntry[]
 }

@@ -1,6 +1,6 @@
-// About: fee structure and comparison (read live from the chain, nothing
-// hardcoded), data-sovereignty statement, feature overview. The official
-// service's price is an external fact kept as a constant with its measurement
+// About: fee composition and comparison (read live from the chain, never
+// hardcoded), the data-sovereignty statement, and a feature overview. The
+// official price is an external fact kept as a constant with a measurement
 // note (≈4.41 AI3/MB as measured 2026-10; credits expire after 90 days);
 // both of this project's fees are read live from the chain/contract and drift
 // with the on-chain rate.
@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { useChain } from '../chain-context'
 import { registryParams, type RegistryParams } from '../lib/registry'
 import { formatAi3 } from '../lib/bytes'
+import { useI18n } from '../i18n'
 
 // Official AutoDrive mainnet price (measured 2026-10, including its
 // CREDITS_PRICE_MULTIPLIER=2.0); credits expire after 90 days and purchasing
@@ -23,6 +24,7 @@ function ai3(n: number): string {
 }
 
 export function AboutPage() {
+  const { t } = useI18n()
   const { byteFeeShannons, connect, status } = useChain()
   const [params, setParams] = useState<RegistryParams | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -55,23 +57,21 @@ export function AboutPage() {
   return (
     <div className="page">
       <section className="card">
-        <h2>Fee comparison (live)</h2>
+        <h2>{t('about.feeTitle')}</h2>
         <p className="muted" style={{ marginTop: 0 }}>
-          PermaDrive publishes at the protocol level: what you pay is what you store, and the data is kept **permanently**. The official AutoDrive
-          service prices storage in credits (expiring after 90 days, purchase requires a Google login). Both PermaDrive fees below are read live from
-          the chain (consensus storage fee + FileRegistry quote); the official price is the 2026-10 measured figure.
+          {t('about.feeIntro')}
         </p>
         {error && <div className="error-text">{error}</div>}
-        {status === 'connecting' && !byteFeeShannons && <p className="muted">Connecting to the consensus chain for live rates…</p>}
+        {status === 'connecting' && !byteFeeShannons && <p className="muted">{t('about.connectingRates')}</p>}
         <table className="files-table">
           <thead>
             <tr>
-              <th>Size</th>
-              <th>Storage fee (consensus)</th>
-              <th>Registry dev fee</th>
-              <th>PermaDrive total</th>
-              <th>Official AutoDrive</th>
-              <th>Difference</th>
+              <th>{t('about.thSize')}</th>
+              <th>{t('about.thStorageFee')}</th>
+              <th>{t('about.thRegistryFee')}</th>
+              <th>{t('about.thTotal')}</th>
+              <th>{t('about.thOfficial')}</th>
+              <th>{t('about.thDifference')}</th>
             </tr>
           </thead>
           <tbody>
@@ -88,7 +88,7 @@ export function AboutPage() {
               </tr>
             ))}
             <tr>
-              <td>Unit price (per MB)</td>
+              <td>{t('about.unitPrice')}</td>
               <td>{byteFeeShannons != null ? `≈ ${ai3(Number(byteFeeShannons * BigInt(MB)) / 1e18)} AI3` : '—'}</td>
               <td>{paramsPerMb != null ? `${ai3(paramsPerMb)} AI3` : '—'}</td>
               <td>
@@ -99,60 +99,55 @@ export function AboutPage() {
                 </strong>
               </td>
               <td>≈ {ai3(OFFICIAL_AI3_PER_MB)} AI3</td>
-              <td>credits expire in 90 days</td>
+              <td>{t('about.creditsExpire')}</td>
             </tr>
           </tbody>
         </table>
         <div className="kv" style={{ marginTop: 10 }}>
-          <span>dev fee formula</span>
-          <span className="mono small-text">max(minFee, size × feePerByte) — overpayment is refunded automatically</span>
+          <span>{t('about.feeFormulaLabel')}</span>
+          <span className="mono small-text">{t('about.feeFormula')}</span>
         </div>
         <div className="kv">
-          <span>Current parameters (live from the contract)</span>
+          <span>{t('about.paramsLabel')}</span>
           <span className="mono small-text">
             {params
-              ? `feePerByte ${params.feePerByte} wei/byte · minFee ${formatAi3(params.minFee)} AI3 · cap ${formatAi3(params.maxFeePerByte)} AI3/byte (hard anti-rug ceiling)`
-              : 'reading…'}
+              ? t('about.paramsValue', [params.feePerByte, formatAi3(params.minFee), formatAi3(params.maxFeePerByte)])
+              : t('about.reading')}
           </span>
         </div>
-        <p className="privacy-note">
-          The dev fee is charged on the value-added point of one-click cross-device recovery; not registering leaves the data itself untouched — files
-          can always be fetched for free with their manifest or by scanning the chain directly (no involvement of this project). Registration fees go
-          straight to the project treasury and fund the maintenance of the public frontend and tooling.
-        </p>
+        <p className="privacy-note">{t('about.sovereigntyNote')}</p>
       </section>
 
       <section className="card">
-        <h2>Features and their billing</h2>
+        <h2>{t('about.featuresTitle')}</h2>
         <table className="files-table">
           <thead>
             <tr>
-              <th>Feature</th>
-              <th>What it does</th>
-              <th>Cost</th>
+              <th>{t('about.thFeature')}</th>
+              <th>{t('about.thWhatItDoes')}</th>
+              <th>{t('about.thCost')}</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Permanent files</td>
-              <td>Any file packed as IPLD and published on-chain, archived permanently by the farmer network; the manifest is the retrieval credential</td>
-              <td>storage fee + registration (optional custody)</td>
+              <td>{t('about.featureFiles')}</td>
+              <td>{t('about.featureFilesDesc')}</td>
+              <td>{t('about.featureFilesCost')}</td>
             </tr>
             <tr>
-              <td>Versioned notes</td>
-              <td>Append-only text records; every save is a new immutable version, the version chain is held in the on-chain registry</td>
-              <td>per version: storage fee + dev fee (small texts usually hit the 0.01 AI3 floor)</td>
+              <td>{t('about.featureNotes')}</td>
+              <td>{t('about.featureNotesDesc')}</td>
+              <td>{t('about.featureNotesCost')}</td>
             </tr>
             <tr>
-              <td>Encrypted vault</td>
-              <td>Entries are AES-256-GCM encrypted as one envelope before publishing (only ciphertext reaches the chain); one wallet-signature unlock, keystore file as the recovery fallback</td>
-              <td>per save: storage fee + dev fee (you control the registration cadence)</td>
+              <td>{t('about.featureVault')}</td>
+              <td>{t('about.featureVaultDesc')}</td>
+              <td>{t('about.featureVaultCost')}</td>
             </tr>
           </tbody>
         </table>
         <p className="privacy-note">
-          "My files" and notes are published in the clear (permanently public); private text belongs in the encrypted vault — principles and
-          do-it-yourself verification in{' '}
+          {t('about.plaintextNote')}{' '}
           <a href="https://github.com/tgarm/permadrive/blob/main/VAULT.md" target="_blank" rel="noreferrer noopener">
             VAULT.md
           </a>
@@ -161,22 +156,22 @@ export function AboutPage() {
       </section>
 
       <section className="card">
-        <h2>Data sovereignty</h2>
+        <h2>{t('about.sovereigntyTitle')}</h2>
         <div className="kv">
-          <span>No accounts</span>
-          <span>wallet signatures are the identity; no personal information is collected</span>
+          <span>{t('about.sovAccounts')}</span>
+          <span>{t('about.sovAccountsDesc')}</span>
         </div>
         <div className="kv">
-          <span>No backend</span>
-          <span>fully static frontend; the RPC / indexer dependencies are replaceable public protocol infrastructure</span>
+          <span>{t('about.sovBackend')}</span>
+          <span>{t('about.sovBackendDesc')}</span>
         </div>
         <div className="kv">
-          <span>No lock-in</span>
-          <span>manifests are self-contained and shareable; even if this project disappears, any public infrastructure can still retrieve your data in full</span>
+          <span>{t('about.sovLockIn')}</span>
+          <span>{t('about.sovLockInDesc')}</span>
         </div>
         <div className="kv">
-          <span>Permanent means permanent</span>
-          <span>published data cannot be deleted (that is what makes version history and undelete possible) — make sure content is fit for public before publishing</span>
+          <span>{t('about.sovPermanent')}</span>
+          <span>{t('about.sovPermanentDesc')}</span>
         </div>
       </section>
     </div>

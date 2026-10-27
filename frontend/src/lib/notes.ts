@@ -9,6 +9,8 @@
 // new CID and destroy the dedup idempotency — version order derives from the
 // on-chain heights instead.
 
+import { t } from '../i18n'
+
 export const NOTE_FILE_PREFIX = 'pdnote-'
 
 /** Note ID: random 4-byte hex (appears inside the filename, so a compact no-dash form) */
@@ -42,7 +44,7 @@ export function parseNoteFileName(name: string): NoteFileRef | null {
 }
 
 /** slug → display title (lossy: '-' and spaces are indistinguishable; the recovery side uses it as initial display only, editing and saving corrects it) */
-export const titleFromSlug = (slug: string): string => slug.replace(/-/g, ' ').trim() || 'Untitled note'
+export const titleFromSlug = (slug: string): string => slug.replace(/-/g, ' ').trim() || t('notes.untitledNote')
 
 /**
  * Group registry entries by note id (entries not matching the pdnote convention

@@ -9,6 +9,7 @@ import { ApiPromise } from '@polkadot/api'
 import type { SubmittableExtrinsic } from '@polkadot/api/types'
 import { PacedHttpProvider, RawRpc, sleep } from './rpc'
 import { tryDecodeRemark } from './dag'
+import { t } from '../i18n'
 
 export interface ExtractResult {
   found: Map<string, Uint8Array> // cidString → encoded node bytes
@@ -107,10 +108,7 @@ export async function submitAndWaitConfirmed(
     }
     if (!inclusion) await sleep(pollMs)
   }
-  if (!inclusion)
-    throw new Error(
-      'tx not found on best chain before timeout (the tx may still be in the mempool — do not resubmit with the same nonce; retry retrieval later from the file list)',
-    )
+  if (!inclusion) throw new Error(t('errors.txNotFoundTimeout'))
 
   // 2) Wait for `depth` following blocks + canonical check (Nakamoto probabilistic confirmation)
   onStage?.('confirming', `block #${inclusion.height}`)

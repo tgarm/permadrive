@@ -1,16 +1,18 @@
 import { useSyncExternalStore } from 'react'
 import { getTheme, subscribe, toggleTheme } from '../lib/theme'
+import { t } from '../i18n'
 
 export function ThemeToggle() {
   const theme = useSyncExternalStore(subscribe, getTheme)
+  const name = theme === 'light' ? t('theme.light') : t('theme.dark')
   return (
     <button
       className="btn ghost small theme-toggle"
       onClick={toggleTheme}
-      title={`Current theme: ${theme === 'light' ? 'light' : 'dark'}. Click to switch.`}
-      aria-label="Toggle color scheme"
+      title={t('theme.title', [name])}
+      aria-label={t('theme.aria')}
     >
-      {theme === 'light' ? '☀ Light' : '☾ Dark'}
+      {theme === 'light' ? `☀ ${t('theme.light')}` : `☾ ${t('theme.dark')}`}
     </button>
   )
 }

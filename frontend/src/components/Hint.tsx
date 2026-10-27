@@ -5,11 +5,13 @@
 // VAULT.md. Same rule for all pages: few words by default, more on expansion.
 
 import type { ReactNode } from 'react'
+import { t } from '../i18n'
 
-export function Hint({ children, label = 'Explanation' }: { children: ReactNode; label?: string }) {
+export function Hint({ children, label }: { children: ReactNode; label?: string }) {
+  const resolved = label ?? t('common.hintLabel')
   return (
     <details className="hint">
-      <summary aria-label={label} title={label}>
+      <summary aria-label={resolved} title={resolved}>
         ?
       </summary>
       <div className="hint-body">{children}</div>

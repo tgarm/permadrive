@@ -32,6 +32,7 @@ import {
   type RegistryRecord,
   type TaskRecord,
 } from '../lib/store'
+import { nodeCount, t, useI18n } from '../i18n'
 
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 // single-file limit: larger files need chunked upload (not implemented yet)
 
@@ -47,15 +48,6 @@ interface UploadSession {
 
 type RowBusy = Record<string, string>
 
-const STAGE_TEXT: Record<string, string> = {
-  packing: 'Packing locally (IPLD chunking)…',
-  'awaiting-confirm': 'Awaiting fee confirmation',
-  signing: 'Waiting for wallet signature…',
-  submitting: 'Submitted, waiting for block inclusion…',
-  scanning: 'Scanning the best chain to locate the transaction…',
-  confirming: 'Waiting for block confirmations (12 blocks)…',
-}
-
 function saveBlob(bytes: Uint8Array, name: string, mimeType: string | null): void {
   // Copy into a standalone ArrayBuffer to work around TS's ArrayBufferLike constraint on BlobPart
   const copy = new Uint8Array(bytes.length)
@@ -70,6 +62,7 @@ function saveBlob(bytes: Uint8Array, name: string, mimeType: string | null): voi
 }
 
 export function FilesPage() {
+  const { t } = useI18n()
   const { connect } = useChain()
   const { active: activeSigner, evm: evmSigner } = useSigner()
   const [manifests, setManifests] = useState<ManifestV1[]>([])
@@ -77,8 +70,10 @@ export function FilesPage() {
   const [registryRecords, setRegistryRecords] = useState<RegistryRecord[]>([])
   const [upload, setUpload] = useState<UploadSession | null>(null)
   const [rowBusy, setRowBusy] = useState<RowBusy>({})
+  const [syncing, setSyncing] = useState<Set<string>>(new Set()) // rootCids with a sync in flight (explicit state — never match on copy text)
   const [notice, setNotice] = useState<string | null>(null)
   const [recoverState, setRecoverState] = useState<string | null>(null)
+  const [recoverBusy, setRecoverBusy] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
@@ -143,10 +138,10 @@ export function FilesPage() {
     void refresh().then(async () => {
       // Restart unfinished archive watches (resumes after refresh/close)
       const [ts, ms] = [await listTasks(), await listManifests()]
-      for (const t of ts.filter((x) => !x.done)) {
-        const manifest = ms.find((m) => m.rootCid === t.id) ?? (await getManifest(t.id))
+      for (const tk of ts.filter((x) => !x.done)) {
+        const manifest = ms.find((m) => m.rootCid === tk.id) ?? (await getManifest(tk.id))
         if (manifest) void watchArchive(manifest)
-        else await deleteTask(t.id)
+        else await deleteTask(tk.id)
       }
     })
   }, [refresh, watchArchive])
@@ -154,7 +149,7 @@ export function FilesPage() {
   const pickFile = async (file: File) => {
     setNotice(null)
     if (file.size > MAX_UPLOAD_BYTES) {
-      setUpload({ fileName: file.name, fileSize: file.size, stage: 'error', error: `Per-file limit is ${formatBytes(MAX_UPLOAD_BYTES)} (chunked uploads for larger files are planned)` })
+      setUpload({ fileName: file.name, fileSize: file.size, stage: 'error', error: t('files.maxSizeError', [formatBytes(MAX_UPLOAD_BYTES)]) })
       return
     }
     setUpload({ fileName: file.name, fileSize: file.size, stage: 'packing' })
@@ -172,7 +167,7 @@ export function FilesPage() {
     const u = upload
     if (!u?.prepared || !u.fee || u.stage !== 'awaiting-confirm') return
     if (!activeSigner) {
-      setUpload({ ...u, stage: 'error', error: 'No active signer (connect a wallet or use a local key)' })
+      setUpload({ ...u, stage: 'error', error: t('files.noSignerUpload') })
       return
     }
     try {
@@ -182,7 +177,7 @@ export function FilesPage() {
       )
       await putManifest(manifest)
       setUpload(null)
-      setNotice(`✓ Published on chain: block #${manifest.txs[0].height} · tx ${manifest.txs[0].txHash.slice(0, 18)}…`)
+      setNotice(t('files.publishedNotice', [manifest.txs[0].height, manifest.txs[0].txHash.slice(0, 18) + '…']))
       void watchArchive(manifest)
       await refresh()
     } catch (e) {
@@ -192,14 +187,14 @@ export function FilesPage() {
 
   const download = async (manifest: ManifestV1) => {
     setNotice(null)
-    setRowBusy((b) => ({ ...b, [manifest.rootCid]: 'Retrieving from chain…' }))
+    setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.retrieving') }))
     try {
       const api = await connect()
       const result = await retrieveFile(api, manifest)
       saveBlob(result.bytes, manifest.file.name, manifest.file.mimeType)
       setRowBusy((b) => ({
         ...b,
-        [manifest.rootCid]: result.sha256Match ? `✓ sha256 match (${result.sha256.slice(0, 16)}…)` : `✗ sha256 mismatch! ${result.sha256}`,
+        [manifest.rootCid]: result.sha256Match ? t('files.sha256Match', [result.sha256.slice(0, 16)]) : t('files.sha256Mismatch', [result.sha256]),
       }))
     } catch (e) {
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: `✗ ${(e as Error).message}` }))
@@ -212,9 +207,9 @@ export function FilesPage() {
       const manifest = migrateManifest(JSON.parse(await file.text()))
       await putManifest(manifest)
       await refresh()
-      setNotice(`✓ Manifest imported: ${manifest.file.name} (${manifest.nodes.length} nodes)`)
+      setNotice(t('files.importNotice', [manifest.file.name, nodeCount(manifest.nodes.length)]))
     } catch (e) {
-      setNotice(`✗ Import failed: ${(e as Error).message}`)
+      setNotice(t('files.importFailed', [(e as Error).message]))
     }
   }
 
@@ -230,30 +225,38 @@ export function FilesPage() {
   const syncToRegistry = async (manifest: ManifestV1) => {
     setNotice(null)
     if (!activeSigner) {
-      setRowBusy((b) => ({ ...b, [manifest.rootCid]: '✗ Substrate signer required (publishes the manifest file)' }))
+      setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.needSubstrate') }))
       return
     }
     if (!evmSigner) {
-      setRowBusy((b) => ({ ...b, [manifest.rootCid]: '✗ EVM signer required (registers the on-chain registry entry)' }))
+      setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.needEvm') }))
       return
     }
     const existing = registryRecords.find((r) => r.rootCid === manifest.rootCid)
     if (existing) {
-      setRowBusy((b) => ({ ...b, [manifest.rootCid]: `Registered (manifest ${existing.manifestCid.slice(0, 16)}… @block ${existing.height})` }))
+      setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.alreadyHosted', [existing.manifestCid.slice(0, 16), existing.height]) }))
       return
     }
+    setSyncing((s) => new Set(s).add(manifest.rootCid))
     try {
       const api = await connect()
-      setRowBusy((b) => ({ ...b, [manifest.rootCid]: 'Packing manifest…' }))
+      setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('stage.packingManifest') }))
       const publication = await publishManifestToChain(api, manifest, activeSigner, (stage, detail) => {
-        const text = { signing: 'Waiting for wallet signature (publishing manifest)…', submitting: 'Manifest submitted…', scanning: 'Scanning blocks…', confirming: 'Waiting for confirmations (12 blocks)…' }[stage] ?? stage
+        // The manifest publish has its own progress copy (emphasizing the manifest file itself)
+        const text = {
+          signing: t('stage.manifestSigning'),
+          submitting: t('stage.manifestSubmitting'),
+          scanning: t('stage.manifestScanning'),
+          confirming: t('stage.manifestConfirming'),
+          'packing-manifest': t('stage.packingManifest'),
+        }[stage] ?? stage
         setRowBusy((b) => ({ ...b, [manifest.rootCid]: detail ? `${text} ${detail}` : text }))
       })
-      setRowBusy((b) => ({ ...b, [manifest.rootCid]: `Manifest published (block #${publication.height}), fetching registry fee quote…` }))
-      // dev fee = max(minFee, 5% of the storage fee estimate); show the quote before paying
+      setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.manifestPublished', [publication.height]) }))
+      // dev fee = max(minFee, 10% of the storage fee estimate); show the quote before paying
       const fee = await quoteRegisterFee(manifest.file.size)
       const feeAi3 = (Number(fee) / 1e18).toFixed(4)
-      setRowBusy((b) => ({ ...b, [manifest.rootCid]: `Registering (dev fee ${feeAi3} AI3)…` }))
+      setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.registering', [feeAi3]) }))
       const reg = await registerFile(
         evmSigner,
         {
@@ -275,11 +278,17 @@ export function FilesPage() {
       setRowBusy((b) => ({
         ...b,
         [manifest.rootCid]: reg.alreadyRegistered
-          ? '✓ Registered (this manifest is already in the registry)'
-          : `✓ Registered · manifest @block #${publication.height} · dev fee ${feeAi3} AI3 · tx ${reg.txHash.slice(0, 14)}…`,
+          ? t('files.registeredAlready')
+          : t('files.registeredDone', [publication.height, feeAi3, reg.txHash.slice(0, 14) + '…']),
       }))
     } catch (e) {
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: `✗ ${(e as Error).message}` }))
+    } finally {
+      setSyncing((s) => {
+        const next = new Set(s)
+        next.delete(manifest.rootCid)
+        return next
+      })
     }
   }
 
@@ -288,14 +297,15 @@ export function FilesPage() {
   const recoverFromRegistry = async () => {
     setNotice(null)
     if (!evmSigner) {
-      setRecoverState('✗ Connect an EVM signer first (the registry wallet)')
+      setRecoverState(t('files.recoverNeedEvm'))
       return
     }
+    setRecoverBusy(true)
     try {
-      setRecoverState('Reading the on-chain registry…')
+      setRecoverState(t('files.readingRegistry'))
       const entries = await fetchEntries(evmSigner.address)
       if (entries.length === 0) {
-        setRecoverState(`Empty registry (${evmSigner.address.slice(0, 10)}… has no registrations)`)
+        setRecoverState(t('files.registryEmpty', [evmSigner.address.slice(0, 10) + '…']))
         return
       }
       const api = await connect()
@@ -304,7 +314,7 @@ export function FilesPage() {
       let skipped = 0
       for (let i = 0; i < entries.length; i++) {
         const entry = entries[i]
-        setRecoverState(`Recovering ${i + 1}/${entries.length}: ${entry.name} (block #${entry.height})…`)
+        setRecoverState(t('files.recoveringItem', [i + 1, entries.length, entry.name, entry.height]))
         try {
           const manifest = await recoverManifestFromHint(api, entry.manifestCid, Number(entry.height))
           await putManifest(manifest)
@@ -318,32 +328,38 @@ export function FilesPage() {
           recovered += known.has(manifest.rootCid) ? 0 : 1
           skipped += known.has(manifest.rootCid) ? 1 : 0
         } catch (e) {
-          setRecoverState(`✗ "${entry.name}" recovery failed: ${(e as Error).message}`)
+          setRecoverState(t('files.recoverFailed', [entry.name, (e as Error).message]))
           return
         }
       }
       await refresh()
       setRecoverState(
-        `✓ Recovery complete: ${recovered} new file${recovered === 1 ? '' : 's'}${skipped > 0 ? ` · ${skipped} already present` : ''} (${entries.length} registrations total)`,
+        t('files.recoverDone', [
+          t(recovered === 1 ? 'files.oneNewFile' : 'files.nNewFiles', [recovered]),
+          skipped > 0 ? t('files.skippedSuffix', [skipped]) : '',
+          entries.length,
+        ]),
       )
     } catch (e) {
       setRecoverState(`✗ ${(e as Error).message}`)
+    } finally {
+      setRecoverBusy(false)
     }
   }
 
   const removeManifest = async (manifest: ManifestV1) => {
-    if (!window.confirm(`Delete the local index for "${manifest.file.name}"? (On-chain data is untouched; the manifest can be re-imported at any time)`)) return
+    if (!window.confirm(t('files.deleteConfirm', [manifest.file.name]))) return
     await deleteManifest(manifest.rootCid)
     await deleteTask(manifest.rootCid)
     await refresh()
   }
 
-  const taskByRoot = new Map(tasks.map((t) => [t.id, t]))
+  const taskByRoot = new Map(tasks.map((tk) => [tk.id, tk]))
 
   return (
     <div className="page">
       <section className="card upload-card">
-        <h2>Upload</h2>
+        <h2>{t('files.uploadTitle')}</h2>
         <div
           className={`dropzone ${dragOver ? 'over' : ''}`}
           onDragOver={(e) => {
@@ -369,9 +385,9 @@ export function FilesPage() {
             }}
           />
           <button className="btn primary" onClick={() => fileInputRef.current?.click()}>
-            Choose file
+            {t('files.chooseFile')}
           </button>
-          <span className="muted">or drag and drop here · single file ≤ {formatBytes(MAX_UPLOAD_BYTES)}</span>
+          <span className="muted">{t('files.dropHint', [formatBytes(MAX_UPLOAD_BYTES)])}</span>
         </div>
 
         {upload && (
@@ -383,26 +399,24 @@ export function FilesPage() {
             {upload.stage === 'awaiting-confirm' && upload.prepared && upload.fee ? (
               <div className="confirm-panel">
                 <div className="kv">
-                  <span>root CID</span>
+                  <span>{t('files.rootCid')}</span>
                   <span className="mono small-text">{upload.prepared.rootCid}</span>
                 </div>
                 <div className="kv">
-                  <span>IPLD nodes</span>
-                  <span>
-                    {upload.prepared.nodes.length} nodes · {formatBytes(upload.prepared.totalBytes)} on chain
-                  </span>
+                  <span>{t('files.ipldNodes')}</span>
+                  <span>{t('files.nodesOnChain', [nodeCount(upload.prepared.nodes.length), formatBytes(upload.prepared.totalBytes)])}</span>
                 </div>
                 <div className="kv fee">
-                  <span>On-chain fee (estimate)</span>
+                  <span>{t('files.feeEstimate')}</span>
                   <span>≈ {upload.fee.ai3.toFixed(4)} AI3</span>
                 </div>
-                <p className="warning">Publishing is permanent and public — keep private content in the Vault.</p>
+                <p className="warning">{t('files.warningPermanent')}</p>
                 <div className="row">
                   <button className="btn primary" onClick={() => void confirmUpload()}>
-                    Sign and upload
+                    {t('files.signAndUpload')}
                   </button>
                   <button className="btn ghost" onClick={() => setUpload(null)}>
-                    Cancel
+                    {t('common.cancel')}
                   </button>
                 </div>
               </div>
@@ -410,12 +424,12 @@ export function FilesPage() {
               <div>
                 <div className="error-text">{upload.error}</div>
                 <button className="btn ghost small" onClick={() => setUpload(null)}>
-                  Close
+                  {t('common.close')}
                 </button>
               </div>
             ) : (
               <div className="stage-line">
-                {STAGE_TEXT[upload.stage] ?? upload.stage}
+                {stageText(upload.stage)}
                 {upload.detail ? <span className="muted"> · {upload.detail}</span> : null}
               </div>
             )}
@@ -423,32 +437,24 @@ export function FilesPage() {
         )}
 
         <p className="privacy-note">
-          Once published, anyone can read it and it cannot be deleted.
+          {t('files.privacyShort')}
           <Hint>
-            "Sync to registry" registers the file into your on-chain registry (a small registration fee per file, about
-            10% of the storage fee with a 0.01 AI3 floor); on a new device, connect the same wallet and click "Recover
-            from registry" to restore the file list.
+            {t('files.hintSyncTitle')}
             <br />
-            Registering is optional — the file itself can always be fetched for free with its manifest or by scanning
-            the chain. A manifest is a self-contained retrieval credential (it locates every data block); export it and
-            any device can use it. Cost comparison on the About page.
+            {t('files.hintSyncBody')}
           </Hint>
         </p>
       </section>
 
       <section className="card">
         <div className="card-head">
-          <h2>My Files</h2>
+          <h2>{t('files.myFiles')}</h2>
           <div className="row-actions">
             <button className="btn ghost small" onClick={() => importInputRef.current?.click()}>
-              Import manifest
+              {t('files.importManifest')}
             </button>
-            <button
-              className="btn ghost small"
-              onClick={() => void recoverFromRegistry()}
-              disabled={!!recoverState && /Recovering/.test(recoverState)}
-            >
-              Recover from on-chain registry
+            <button className="btn ghost small" onClick={() => void recoverFromRegistry()} disabled={recoverBusy}>
+              {t('files.recoverFromRegistry')}
             </button>
           </div>
           <input
@@ -466,17 +472,17 @@ export function FilesPage() {
         {notice && <div className="notice">{notice}</div>}
         {recoverState && <div className="notice">{recoverState}</div>}
         {manifests.length === 0 ? (
-          <p className="muted">No files yet. Upload, import a manifest, or recover from the on-chain registry.</p>
+          <p className="muted">{t('files.empty')}</p>
         ) : (
           <table className="files-table">
             <thead>
               <tr>
-                <th>File</th>
-                <th>Size</th>
-                <th>DSN archive</th>
-                <th>Registry</th>
-                <th>Published</th>
-                <th>Actions</th>
+                <th>{t('files.thFile')}</th>
+                <th>{t('common.size')}</th>
+                <th>{t('files.thDsn')}</th>
+                <th>{t('files.thRegistry')}</th>
+                <th>{t('files.thPublished')}</th>
+                <th>{t('common.actions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -492,40 +498,36 @@ export function FilesPage() {
                     <td>{formatBytes(m.file.size)}</td>
                     <td>
                       {!task ? (
-                        <span className="muted">Unknown</span>
+                        <span className="muted">{t('files.archiveUnknown')}</span>
                       ) : task.done ? (
-                        <span className="ok">✓ Archived</span>
+                        <span className="ok">{t('files.archived')}</span>
                       ) : (
                         <span>
-                          {task.indexed}/{task.total} indexed
+                          {task.indexed}/{task.total} {t('files.indexed')}
                         </span>
                       )}
                     </td>
                     <td>
                       {syncedRootCids.has(m.rootCid) ? (
-                        <span className="ok">✓ Registered</span>
+                        <span className="ok">{t('files.registered')}</span>
                       ) : (
-                        <span className="muted">Not registered</span>
+                        <span className="muted">{t('files.notRegistered')}</span>
                       )}
                     </td>
                     <td className="small-text">{new Date(m.submittedAt).toLocaleString()}</td>
                     <td>
                       <div className="row-actions">
                         <button className="btn small" onClick={() => void download(m)}>
-                          Download
+                          {t('common.download')}
                         </button>
                         <button className="btn ghost small" onClick={() => exportManifest(m)}>
-                          Manifest
+                          {t('files.manifestBtn')}
                         </button>
-                        <button
-                          className="btn ghost small"
-                          onClick={() => void syncToRegistry(m)}
-                          disabled={!!rowBusy[m.rootCid] && /Packing|sign|submitted|Scanning|confirm|Registering/.test(rowBusy[m.rootCid])}
-                        >
-                          Sync registry
+                        <button className="btn ghost small" onClick={() => void syncToRegistry(m)} disabled={syncing.has(m.rootCid)}>
+                          {t('files.syncRegistry')}
                         </button>
                         <button className="btn ghost small danger" onClick={() => void removeManifest(m)}>
-                          Delete
+                          {t('common.delete')}
                         </button>
                       </div>
                     </td>
@@ -536,15 +538,23 @@ export function FilesPage() {
           </table>
         )}
         <p className="privacy-note">
-          The on-chain registry holds your file list — connect the same wallet on a new device to recover it in one click.
-          <Hint>
-            The registry is a public index (which wallet registered which files), not access control: published data
-            itself is readable by anyone. Registration charges a dev fee (≈10% of the on-chain storage fee, 0.01 AI3
-            floor) that funds the maintenance of the public frontend and tooling; skipping registration does not affect
-            retrieving the data itself from the chain.
-          </Hint>
+          {t('files.privacyRegistry')}
+          <Hint>{t('files.hintRegistry')}</Hint>
         </p>
       </section>
     </div>
   )
+}
+
+// 上传会话进度行：stage 是稳定标识，文案统一走字典（stage.*）
+function stageText(stage: UploadSession['stage']): string {
+  const map: Record<string, string> = {
+    packing: 'stage.packing',
+    'awaiting-confirm': 'stage.awaitingConfirm',
+    signing: 'stage.signing',
+    submitting: 'stage.submitting',
+    scanning: 'stage.scanning',
+    confirming: 'stage.confirming',
+  }
+  return map[stage] ? t(map[stage]) : stage
 }

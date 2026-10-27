@@ -11,6 +11,7 @@ import { loadConfig } from './config'
 import { autoEvmChain } from './evm'
 import { REGISTRY_ABI } from './registry-abi'
 import type { EvmSigner } from './wallet/types'
+import { t } from '../i18n'
 
 export interface RegistryEntry {
   manifestCid: string
@@ -34,17 +35,17 @@ export function registryPublicClient(): PublicClient {
 function registryAddress(): `0x${string}` {
   const addr = loadConfig().registryAddress
   if (!/^0x[0-9a-fA-F]{40}$/.test(addr) || /^0x0{40}$/.test(addr)) {
-    throw new Error('FileRegistry address not configured (Settings → on-chain registry, or built in once the mainnet deployment lands)')
+    throw new Error(t('errors.registryNotConfigured'))
   }
   return addr as `0x${string}`
 }
 
 export function walletClientFor(signer: EvmSigner): WalletClient {
   if (signer.kind === 'injected') {
-    if (!signer.provider) throw new Error('injected EVM signer is missing a provider')
+    if (!signer.provider) throw new Error(t('errors.injectedNoProvider'))
     return createWalletClient({ chain: autoEvmChain, transport: custom(signer.provider), account: signer.address as `0x${string}` })
   }
-  if (!signer.account) throw new Error('local EVM signer is missing an account')
+  if (!signer.account) throw new Error(t('errors.localNoAccount'))
   return createWalletClient({
     chain: autoEvmChain,
     transport: http(loadConfig().evmRpcUrl),
@@ -57,7 +58,7 @@ export function walletClientFor(signer: EvmSigner): WalletClient {
 // is already a strong signal)
 async function waitWritten(hash: `0x${string}`): Promise<void> {
   const receipt = await registryPublicClient().waitForTransactionReceipt({ hash, confirmations: 2 })
-  if (receipt.status !== 'success') throw new Error(`registry tx failed (${receipt.status}): ${hash}`)
+  if (receipt.status !== 'success') throw new Error(t('errors.registryTxFailed', [receipt.status, hash]))
 }
 
 // writeContract's account must be given explicitly (nullable in the client's

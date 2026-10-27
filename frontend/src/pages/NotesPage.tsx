@@ -17,6 +17,7 @@ import { recoverManifestFromHint } from '../lib/manifestRecover'
 import { retrieveFile } from '../lib/retrieve'
 import { fetchEntries, quoteRegisterFee, registerFile } from '../lib/registry'
 import { deleteNote, getManifest, listNotes, putManifest, putNote, type NoteRecord, type NoteVersionRecord } from '../lib/store'
+import { nodeCount, useI18n, versionCount } from '../i18n'
 
 interface SaveSession {
   noteId: string
@@ -31,6 +32,7 @@ interface SaveSession {
 }
 
 export function NotesPage() {
+  const { t } = useI18n()
   const { connect } = useChain()
   const { active, evm } = useSigner()
   const [notes, setNotes] = useState<NoteRecord[]>([])
@@ -62,14 +64,14 @@ export function NotesPage() {
     setTitle(note.title)
     if (note.content === '' && note.versions.length > 0) {
       const latest = note.versions[note.versions.length - 1]
-      setRowBusy(`Fetching latest version (v${latest.version})…`)
+      setRowBusy(t('notes.fetchLatest', [latest.version]))
       try {
         const text = await fetchVersionText(latest)
         setContent(text)
         await putNote({ ...note, content: text })
         setRowBusy(null)
       } catch (e) {
-        setRowBusy(`✗ content fetch failed: ${(e as Error).message}`)
+        setRowBusy(t('notes.fetchFailed', [(e as Error).message]))
       }
     } else {
       setContent(note.content)
@@ -81,7 +83,7 @@ export function NotesPage() {
     let manifest = await getManifest(version.rootCid)
     if (!manifest) manifest = await recoverManifestFromHint(api, version.manifestCid, version.height)
     const result = await retrieveFile(api, manifest)
-    if (!result.sha256Match) throw new Error(`sha256 mismatch (${result.sha256.slice(0, 16)}…)`)
+    if (!result.sha256Match) throw new Error(t('errors.sha256Mismatch', [result.sha256.slice(0, 16)]))
     return new TextDecoder().decode(result.bytes)
   }
 
@@ -117,11 +119,11 @@ export function NotesPage() {
   const requestSave = async () => {
     setNotice(null)
     if (!activeId || !content.trim()) {
-      setNotice('✗ content is empty')
+      setNotice(t('notes.contentEmpty'))
       return
     }
     if (!active || !evm) {
-      setNotice('✗ needs a Substrate signer (publishing) and an EVM signer (registry)')
+      setNotice(t('common.needSigners'))
       return
     }
     const note = notes.find((n) => n.id === activeId)
@@ -129,7 +131,7 @@ export function NotesPage() {
     const version = note.versions.length + 1
     // No version number in the filename (it feeds content addressing): saving
     // identical content under the same title is idempotent and free
-    const name = noteFileName(note.id, title || 'Untitled')
+    const name = noteFileName(note.id, title || t('common.untitled'))
     setSession({ noteId: note.id, version, name, stage: 'packing' })
     try {
       const file = new File([content], name, { type: 'text/markdown' })
@@ -137,7 +139,7 @@ export function NotesPage() {
       const last = note.versions[note.versions.length - 1]
       if (last && last.rootCid === prepared.rootCid) {
         setSession(null)
-        setNotice('✓ content unchanged (same CID under content addressing), no new version needed')
+        setNotice(t('notes.unchanged'))
         return
       }
       const api = await connect()
@@ -161,17 +163,22 @@ export function NotesPage() {
       const api = await connect()
       // 1) content file into the DSN
       const manifest = await publishPrepared(api, s.prepared, active, (stage, detail) => {
-        const text = { signing: 'waiting for wallet signature…', submitting: 'submitted, waiting for a block…', scanning: 'scanning for the tx…', confirming: 'waiting for confirmations (12 blocks)…' }[stage] ?? stage
+        const text = {
+          signing: t('stage.signing'),
+          submitting: t('stage.submitting'),
+          scanning: t('stage.scanning'),
+          confirming: t('stage.confirming'),
+        }[stage] ?? stage
         setSession((cur) => (cur ? { ...cur, stage: 'publishing', detail: detail ? `${text} ${detail}` : text } : cur))
       })
       await putManifest(manifest)
-      setSession((cur) => (cur ? { ...cur, detail: 'publishing manifest file…' } : cur))
+      setSession((cur) => (cur ? { ...cur, detail: t('stage.manifestPublishing') } : cur))
       // 2) manifest re-published into the DSN (registry entry locator, same path as "My files" sync)
       const publication = await publishManifestToChain(api, manifest, active, (_stage, detail) =>
         setSession((cur) => (cur ? { ...cur, stage: 'publishing', detail } : cur)),
       )
       // 3) registry register (dev fee)
-      setSession((cur) => (cur ? { ...cur, detail: `registering (dev fee ${s.devFee!.ai3} AI3)…` } : cur))
+      setSession((cur) => (cur ? { ...cur, detail: t('files.registering', [s.devFee!.ai3]) } : cur))
       await registerFile(
         evm,
         { manifestCid: publication.manifestCid, height: publication.height, name: s.name, size: s.prepared.file.size },
@@ -194,7 +201,7 @@ export function NotesPage() {
         updatedAt: Date.now(),
       })
       setSession(null)
-      setNotice(`✓ v${s.version} published: content block #${manifest.txs[0].height} · dev fee ${s.devFee.ai3} AI3 · registry tx ${publication.txHash.slice(0, 14)}…`)
+      setNotice(t('notes.publishedVersion', [s.version, manifest.txs[0].height, s.devFee.ai3, publication.txHash.slice(0, 14) + '…']))
       await refresh()
     } catch (e) {
       setSession((cur) => (cur ? { ...cur, stage: 'error', error: (e as Error).message } : cur))
@@ -205,14 +212,14 @@ export function NotesPage() {
 
   const downloadVersion = async (version: NoteVersionRecord) => {
     setNotice(null)
-    setRowBusy('fetching from chain…')
+    setRowBusy(t('files.retrieving'))
     try {
       const api = await connect()
       let manifest = await getManifest(version.rootCid)
       if (!manifest) manifest = await recoverManifestFromHint(api, version.manifestCid, version.height)
       const result = await retrieveFile(api, manifest)
       saveBlob(result.bytes, version.name, 'text/markdown')
-      setRowBusy(result.sha256Match ? `✓ v${version.version} sha256 match` : `✗ v${version.version} sha256 mismatch!`)
+      setRowBusy(result.sha256Match ? t('notes.sha256MatchV', [version.version]) : t('notes.sha256MismatchV', [version.version]))
     } catch (e) {
       setRowBusy(`✗ ${(e as Error).message}`)
     }
@@ -220,12 +227,12 @@ export function NotesPage() {
 
   const restoreVersion = async (version: NoteVersionRecord) => {
     setNotice(null)
-    setRowBusy(`fetching v${version.version}…`)
+    setRowBusy(t('notes.fetchingV', [version.version]))
     try {
       const text = await fetchVersionText(version)
       setContent(text)
       setTitle(titleFromSlug(parseNoteFileName(version.name)?.titleSlug ?? ''))
-      setRowBusy(`✓ v${version.version} loaded into the editor (not published; saving creates a new version)`)
+      setRowBusy(t('notes.loadedEditor', [version.version]))
     } catch (e) {
       setRowBusy(`✗ ${(e as Error).message}`)
     }
@@ -236,16 +243,16 @@ export function NotesPage() {
   const recoverNotes = async () => {
     setNotice(null)
     if (!evm) {
-      setNotice('✗ connect an EVM signer first (the wallet of the on-chain registry)')
+      setNotice(t('notes.recoverNeedEvm'))
       return
     }
     setRecovering(true)
     try {
-      setNotice('reading the on-chain registry…')
+      setNotice(t('notes.readingRegistry'))
       const entries = await fetchEntries(evm.address)
       const groups = groupNoteEntries(entries)
       if (groups.size === 0) {
-        setNotice(`no note entries in the registry (${entries.length} registrations total)`)
+        setNotice(t('notes.noNoteEntries', [entries.length]))
         return
       }
       const api = await connect()
@@ -254,7 +261,7 @@ export function NotesPage() {
       let idx = 0
       for (const [id, groupEntries] of groups) {
         idx++
-        setNotice(`recovering note ${idx}/${groups.size} (${groupEntries.length} versions)…`)
+        setNotice(t('notes.recoveringNote', [idx, groups.size, versionCount(groupEntries.length)]))
         const versions: NoteVersionRecord[] = []
         for (const entry of groupEntries) {
           const ref = parseNoteFileName(entry.name)
@@ -294,7 +301,13 @@ export function NotesPage() {
         }
       }
       await refresh()
-      setNotice(`✓ recovery complete: ${newNotes} new note${newVersions > 0 ? ` · ${newVersions} new version${newVersions === 1 ? '' : 's'}` : ''} (${groups.size} total)`)
+      setNotice(
+        t('notes.recoverDone', [
+          t(newNotes === 1 ? 'notes.oneNewNote' : 'notes.nNewNotes', [newNotes]),
+          newVersions > 0 ? t('notes.newVersionsSuffix', [newVersions]) : '',
+          groups.size,
+        ]),
+      )
     } catch (e) {
       setNotice(`✗ ${(e as Error).message}`)
     } finally {
@@ -303,7 +316,7 @@ export function NotesPage() {
   }
 
   const removeNote = async (note: NoteRecord) => {
-    if (!window.confirm(`Delete the local record for "${note.title || 'Untitled'}"? (on-chain versions are unaffected; recover from the registry anytime)`)) return
+    if (!window.confirm(t('notes.deleteConfirm', [note.title || t('common.untitled')]))) return
     await deleteNote(note.id)
     if (activeId === note.id) {
       setActiveId(null)
@@ -327,30 +340,29 @@ export function NotesPage() {
       <div className="notes-grid">
         <section className="card">
           <div className="card-head">
-            <h2>Notes</h2>
+            <h2>{t('notes.title')}</h2>
             <div className="row-actions">
               <button className="btn ghost small" onClick={createNote}>
-                New
+                {t('notes.new')}
               </button>
               <button className="btn ghost small" onClick={() => void recoverNotes()} disabled={recovering}>
-                Recover from registry
+                {t('notes.recoverFromRegistry')}
               </button>
             </div>
           </div>
           {notes.length === 0 ? (
-            <p className="muted">No notes yet. Create one, or recover from the on-chain registry.</p>
+            <p className="muted">{t('notes.empty')}</p>
           ) : (
             <div className="note-list">
               {notes.map((n) => (
                 <div key={n.id} className={`note-item ${n.id === activeId ? 'active' : ''}`}>
                   <button className="note-item-main" onClick={() => void openNote(n)}>
-                    <div className="title">{n.title || 'Untitled'}</div>
+                    <div className="title">{n.title || t('common.untitled')}</div>
                     <div className="meta">
-                      {n.versions.length > 0 ? `${n.versions.length} version${n.versions.length === 1 ? '' : 's'}` : 'not published'} ·{' '}
-                      {new Date(n.updatedAt).toLocaleString()}
+                      {n.versions.length > 0 ? versionCount(n.versions.length) : t('notes.notPublished')} · {new Date(n.updatedAt).toLocaleString()}
                     </div>
                   </button>
-                  <button className="btn link danger note-item-delete" title="Delete the local record" onClick={() => void removeNote(n)}>
+                  <button className="btn link danger note-item-delete" title={t('notes.deleteLocalTitle')} onClick={() => void removeNote(n)}>
                     ✕
                   </button>
                 </div>
@@ -358,44 +370,39 @@ export function NotesPage() {
             </div>
           )}
           <p className="privacy-note">
-            The version history lives in the on-chain registry and recovers automatically on a new device.
-            <Hint>The registry records every version grouped by note; the local store is only a draft cache — the on-chain record is authoritative.</Hint>
+            {t('notes.privacyVersioned')}
+            <Hint>{t('notes.hintVersions')}</Hint>
           </p>
         </section>
 
         <section className="card">
           {!activeNote ? (
-            <p className="muted">Pick a note on the left, or click "New".</p>
+            <p className="muted">{t('notes.pickNote')}</p>
           ) : (
             <>
               <div className="card-head">
-                <h2>Edit</h2>
+                <h2>{t('notes.editTitle')}</h2>
                 {rowBusy && <span className="small-text row-status">{rowBusy}</span>}
               </div>
               <label className="field">
-                <span>Title</span>
-                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Untitled" spellCheck={false} />
+                <span>{t('notes.titleLabel')}</span>
+                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t('common.untitled')} spellCheck={false} />
               </label>
               <label className="field">
-                <span>Content</span>
+                <span>{t('notes.contentLabel')}</span>
                 <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={14} spellCheck={false} />
               </label>
               <div className="row">
                 <button className="btn primary" onClick={() => void requestSave()} disabled={!!session && session.stage !== 'error'}>
-                  Save as new version
+                  {t('notes.saveNewVersion')}
                 </button>
                 <button className="btn ghost" onClick={() => void saveDraftLocal()}>
-                  Save local draft only
+                  {t('notes.saveDraft')}
                 </button>
               </div>
               <p className="privacy-note">
-                Published in the clear and permanently public — keep private content in the Vault.
-                <Hint>
-                  Every save = one new version: the content is packed and published + registered in the on-chain
-                  registry (small texts mostly pay the 0.01 AI3 floor). Saving unchanged content skips entirely
-                  (content addressing yields the same CID, zero cost). The version history lives on-chain, recovers
-                  automatically on a new device, and any version can be fetched for comparison.
-                </Hint>
+                {t('notes.privacyPlaintext')}
+                <Hint>{t('notes.hintPlaintext')}</Hint>
               </p>
 
               {session && (
@@ -403,29 +410,26 @@ export function NotesPage() {
                   {session.stage === 'awaiting-confirm' && session.prepared && session.fee && session.devFee ? (
                     <div className="confirm-panel">
                       <div className="kv">
-                        <span>New version</span>
+                        <span>{t('notes.newVersionLabel')}</span>
                         <span>
-                          v{session.version} · {session.prepared.nodes.length} node{session.prepared.nodes.length === 1 ? '' : 's'} ·{' '}
-                          {formatBytes(session.prepared.totalBytes)}
+                          v{session.version} · {nodeCount(session.prepared.nodes.length)} · {formatBytes(session.prepared.totalBytes)}
                         </span>
                       </div>
                       <div className="kv fee">
-                        <span>On-chain storage fee (estimate)</span>
+                        <span>{t('common.storageFeeEstimate')}</span>
                         <span>≈ {session.fee.ai3.toFixed(4)} AI3</span>
                       </div>
                       <div className="kv fee">
-                        <span>Registry dev fee</span>
+                        <span>{t('common.registryDevFee')}</span>
                         <span>{session.devFee.ai3} AI3</span>
                       </div>
-                      <p className="warning">
-                        Every version is permanently public and cannot be deleted.
-                      </p>
+                      <p className="warning">{t('notes.warningVersions')}</p>
                       <div className="row">
                         <button className="btn primary" onClick={() => void confirmSave()}>
-                          Sign and publish
+                          {t('common.signAndPublish')}
                         </button>
                         <button className="btn ghost" onClick={() => setSession(null)}>
-                          Cancel
+                          {t('common.cancel')}
                         </button>
                       </div>
                     </div>
@@ -433,12 +437,12 @@ export function NotesPage() {
                     <div>
                       <div className="error-text">{session.error}</div>
                       <button className="btn ghost small" onClick={() => setSession(null)}>
-                        Close
+                        {t('common.close')}
                       </button>
                     </div>
                   ) : (
                     <div className="stage-line">
-                      {session.stage === 'packing' ? 'packing locally…' : 'publishing…'}
+                      {session.stage === 'packing' ? t('stage.packingPlain') : t('stage.publishing')}
                       {session.detail ? <span className="muted"> · {session.detail}</span> : null}
                     </div>
                   )}
@@ -447,14 +451,14 @@ export function NotesPage() {
 
               {activeNote.versions.length > 0 && (
                 <>
-                  <h2 style={{ marginTop: 18, fontSize: 14 }}>Version history ({activeNote.versions.length})</h2>
+                  <h2 style={{ marginTop: 18, fontSize: 14 }}>{t('notes.versionHistory', [activeNote.versions.length])}</h2>
                   <table className="files-table">
                     <thead>
                       <tr>
-                        <th>Version</th>
-                        <th>Size</th>
-                        <th>Saved</th>
-                        <th>Actions</th>
+                        <th>{t('notes.thVersion')}</th>
+                        <th>{t('common.size')}</th>
+                        <th>{t('notes.thSaved')}</th>
+                        <th>{t('common.actions')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -466,10 +470,10 @@ export function NotesPage() {
                           <td>
                             <div className="row-actions">
                               <button className="btn small" onClick={() => void downloadVersion(v)}>
-                                Download
+                                {t('common.download')}
                               </button>
                               <button className="btn ghost small" onClick={() => void restoreVersion(v)}>
-                                Restore as draft
+                                {t('notes.restoreDraft')}
                               </button>
                             </div>
                           </td>

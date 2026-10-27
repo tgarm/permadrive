@@ -14,5 +14,6 @@ export async function createLocalSigner(mnemonic: string): Promise<SubstrateSign
   await cryptoWaitReady()
   const keyring = new Keyring({ type: 'sr25519', ss58Format: 6094 })
   const pair = keyring.addFromMnemonic(mnemonic)
-  return { kind: 'local', address: pair.address, pair, label: 'Local key (dev)' }
+  // the label is a stable identifier (not copy); WalletBar maps it to a display name in the active locale
+  return { kind: 'local', address: pair.address, pair, label: 'local' }
 }

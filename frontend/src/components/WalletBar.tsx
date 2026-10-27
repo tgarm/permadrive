@@ -12,6 +12,16 @@ import { useSigner } from '../signer-context'
 import { createLocalSigner } from '../lib/wallet/local-keyring'
 import { createLocalEvmSigner } from '../lib/wallet/local-evm'
 import { connectInjectedEvm, hasInjectedEvm } from '../lib/wallet/injected-evm'
+import { t } from '../i18n'
+
+// Signer labels are stable identifiers written by the lib layer; they map to
+// display names in the current locale here. Extension wallet names (Talisman
+// etc.) are proper nouns and render as-is.
+function signerName(label: string): string {
+  if (label === 'local') return t('wallet.labelLocal')
+  if (label === 'injected') return t('wallet.labelInjected')
+  return label
+}
 
 export function WalletBar() {
   const wallet = useWallet()
@@ -78,10 +88,10 @@ export function WalletBar() {
   return (
     <div className="wallet-bar">
       <div className="wallet-section">
-        <div className="wallet-section-title">Wallet (Substrate)</div>
+        <div className="wallet-section-title">{t('wallet.substrateTitle')}</div>
         {!wallet.isConnected ? (
           wallet.availableWallets.length === 0 ? (
-            <span className="muted">No wallet extension detected (Talisman / SubWallet / Polkadot.js)</span>
+            <span className="muted">{t('wallet.noExtension')}</span>
           ) : (
             <div className="wallet-buttons">
               {wallet.availableWallets.map((w) => (
@@ -108,7 +118,7 @@ export function WalletBar() {
               </span>
             )}
             <button className="btn ghost small" onClick={() => wallet.disconnectWallet()}>
-              Disconnect
+              {t('common.disconnect')}
             </button>
           </div>
         )}
@@ -116,7 +126,7 @@ export function WalletBar() {
       </div>
 
       <div className="wallet-section">
-        <div className="wallet-section-title">On-chain registry (EVM · Auto-EVM mainnet)</div>
+        <div className="wallet-section-title">{t('wallet.registryTitle')}</div>
         {evm ? (
           <div className="wallet-connected">
             <span className="mono">
@@ -129,32 +139,32 @@ export function WalletBar() {
                 setDevEvm('none')
               }}
             >
-              Disconnect
+              {t('common.disconnect')}
             </button>
           </div>
         ) : hasInjectedEvm() ? (
           <button className="btn ghost small" onClick={() => void connectInjected()}>
-            Connect browser EVM wallet
+            {t('wallet.connectEvm')}
           </button>
         ) : (
-          <span className="muted">No EVM wallet extension detected — Local key (dev) is available</span>
+          <span className="muted">{t('wallet.noEvmExtension')}</span>
         )}
         {evmError && <div className="error-text">{evmError}</div>}
       </div>
 
       <button className="btn link small" onClick={() => setShowDev((v) => !v)}>
-        {showDev ? 'Hide local key' : 'Local key (dev)'}
+        {showDev ? t('wallet.devHide') : t('wallet.devToggle')}
       </button>
 
       {showDev && (
         <div className="wallet-section dev">
-          <div className="wallet-section-title">Local key (dev · mnemonic never persisted)</div>
+          <div className="wallet-section-title">{t('wallet.devTitle')}</div>
           {localSigner ? (
             <div className="wallet-connected">
               <span className="mono">
                 {localSigner.address.slice(0, 12)}…{localSigner.address.slice(-8)}
               </span>
-              {devEvm === 'local' && evm && <span className="mono"> · {evm.address.slice(0, 8)}… (EVM)</span>}
+              {devEvm === 'local' && evm && <span className="mono"> · {evm.address.slice(0, 8)}…{t('wallet.evmSuffix')}</span>}
               <button
                 className="btn ghost small"
                 onClick={() => {
@@ -167,20 +177,20 @@ export function WalletBar() {
                   }
                 }}
               >
-                Clear
+                {t('wallet.clear')}
               </button>
             </div>
           ) : (
             <div className="local-mnemonic">
               <input
                 type="password"
-                placeholder="mnemonic (12/24 words)"
+                placeholder={t('wallet.mnemonicPlaceholder')}
                 value={mnemonic}
                 onChange={(e) => setMnemonic(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && void useLocalMnemonicBoth()}
               />
               <button className="btn small" disabled={!mnemonic.trim()} onClick={() => void useLocalMnemonicBoth()}>
-                Use (Substrate + EVM)
+                {t('wallet.useBoth')}
               </button>
             </div>
           )}
@@ -191,12 +201,12 @@ export function WalletBar() {
       <div className={`active-signer ${active ? 'on' : ''}`}>
         {active || evm
           ? [
-              active ? `Substrate: ${active.label} · ${active.address.slice(0, 10)}…` : null,
-              evm ? `EVM: ${evm.label} · ${evm.address.slice(0, 8)}…` : null,
+              active ? t('wallet.substrateLabel', [signerName(active.label), active.address.slice(0, 10) + '…']) : null,
+              evm ? t('wallet.evmLabel', [signerName(evm.label), evm.address.slice(0, 8) + '…']) : null,
             ]
               .filter(Boolean)
-              .join(' | ')
-          : 'No active signer'}
+              .join(' ｜ ')
+          : t('wallet.noSigner')}
       </div>
     </div>
   )

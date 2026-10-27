@@ -12,6 +12,7 @@ import { extractRemarkNodes } from './chain'
 import { assemble } from './dag'
 import type { ManifestV1 } from './manifest'
 import { sha256Hex } from './bytes'
+import { t } from '../i18n'
 
 export interface RetrieveResult {
   bytes: Uint8Array
@@ -34,7 +35,7 @@ export async function retrieveFile(api: ApiPromise, manifest: ManifestV1): Promi
     }
   }
   const missing = manifest.nodes.filter((n) => !nodeBytesByCid.has(n.cid))
-  if (missing.length > 0) throw new Error(`${missing.length} node(s) not found on chain (within ${MAX_PARENT_HOPS} parent-block hops)`)
+  if (missing.length > 0) throw new Error(t('errors.nodesNotFound', [missing.length, MAX_PARENT_HOPS]))
 
   const { bytes, metadata } = assemble(manifest.rootCid, (cid) => {
     const b = nodeBytesByCid.get(cid)

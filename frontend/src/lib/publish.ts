@@ -18,6 +18,7 @@ import { makeRemarkPayload, packFile, type PackedNode } from './dag'
 import type { ManifestV1 } from './manifest'
 import { sha256Hex } from './bytes'
 import type { SubstrateSigner } from './wallet/types'
+import { t } from '../i18n'
 
 export interface PreparedUpload {
   file: { name: string; size: number; sha256: string; mimeType: string | null }
@@ -82,8 +83,8 @@ export async function publishPrepared(
   } catch (e) {
     const message = (e as Error).message
     if (/temporarily banned|not found on best chain/.test(message)) throw e
-    onStage('signing', 'single tx rejected, falling back to per-tx signing…')
-    for (const t of remarkTxs()) inclusions.push(await submitTx(t))
+    onStage('signing', t('stage.batchFallback'))
+    for (const tx of remarkTxs()) inclusions.push(await submitTx(tx))
   }
 
   const chainName = (await api.rpc.system.chain()).toString()

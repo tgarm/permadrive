@@ -10,6 +10,7 @@ import type { ApiPromise } from '@polkadot/api'
 import { extractRemarkNodes } from './chain'
 import { assemble } from './dag'
 import { validateManifest, type ManifestV1 } from './manifest'
+import { t } from '../i18n'
 
 // The publisher records the inclusion block; +3 tolerates the extreme case of
 // a reorg followed by resubmission
@@ -29,8 +30,8 @@ export async function recoverManifestFromHint(
     const { bytes } = assemble(manifestCid, () => nodeBytes)
     const parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown
     const err = validateManifest(parsed)
-    if (err) throw new Error(`manifest retrieved from chain failed validation: ${err}`)
+    if (err) throw new Error(t('errors.recoveredManifestInvalid', [err]))
     return parsed as ManifestV1
   }
-  throw new Error(`manifest root node ${manifestCid} not found in blocks ${heightHint}~${heightHint + SCAN_BLOCKS}`)
+  throw new Error(t('errors.manifestRootNotFound', [heightHint, heightHint + SCAN_BLOCKS, manifestCid]))
 }

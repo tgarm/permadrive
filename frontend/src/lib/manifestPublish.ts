@@ -29,7 +29,9 @@ export async function publishManifestToChain(
 ): Promise<ManifestPublication> {
   const json = JSON.stringify(manifest)
   const file = new File([json], manifestFileName(manifest), { type: 'application/json' })
-  onStage?.('packing manifest file')
+  // the stage argument is a stable identifier (not copy); the UI maps it to
+  // progress text in the active locale
+  onStage?.('packing-manifest')
   const prepared = await prepareUpload(file)
   const outer = await publishPrepared(api, prepared, signer, (stage, detail) => onStage?.(stage, detail))
   return { manifestCid: outer.rootCid, height: outer.txs[0].height, txHash: outer.txs[0].txHash }
