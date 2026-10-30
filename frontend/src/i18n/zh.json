@@ -409,7 +409,13 @@
     "sendFailed": "发送失败：{0}",
     "noKey": "对方尚未注册加密公钥——对方需连接一次钱包自动注册。",
     "locked": "🔒 已加密（连接同一钱包即可解密）",
-    "noPlainSelf": "🔒 其他设备发送（发件明文仅存本机）"
+    "noPlainSelf": "🔒 其他设备发送（发件明文仅存本机）",
+    "decryptAll": "Decrypt all ({0} locked)",
+    "unlock": "🔓 Decrypt",
+    "unlocking": "Decrypting…",
+    "decryptFailedLabel": "🔒 decryption failed",
+    "decryptFailed": "Decryption failed: {0}",
+    "decryptedCount": "Decrypted {0} message(s)."
   },
   "paywall": {
     "title": "付费下载",

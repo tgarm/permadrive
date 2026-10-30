@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSigner } from '../signer-context'
-import { ensureAnnounced, sendEncryptedMessage, syncMessages } from '../lib/mailbox'
+import { decryptMessage, decryptPendingMessages, ensureAnnounced, sendEncryptedMessage, syncMessages } from '../lib/mailbox'
 import { listMessages, markMessageRead, type MessageRecord } from '../lib/store'
 import { useI18n } from '../i18n'
 
@@ -24,6 +24,7 @@ export function MessagesPage() {
   const [to, setTo] = useState('')
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  const [unlocking, setUnlocking] = useState<string | null>(null)
 
   const refresh = useCallback(async () => setMessages(await listMessages()), [])
 
@@ -65,6 +66,38 @@ export function MessagesPage() {
     }, 30_000)
     return () => clearInterval(iv)
   }, [evm, refresh])
+
+  // unlock one message (the injected path is user-initiated so background
+  // polling never spams wallet prompts, R03)
+  const unlock = async (m: MessageRecord) => {
+    if (!evm) return
+    setUnlocking(m.id)
+    try {
+      await decryptMessage(evm, m)
+    } catch (e) {
+      setStatus(t('messages.decryptFailed', [(e as Error).message]))
+    } finally {
+      setUnlocking(null)
+      await refresh()
+    }
+  }
+
+  // decrypt every locked/failed message for this account
+  const unlockAll = async () => {
+    if (!evm) return
+    setBusy(true)
+    try {
+      const n = await decryptPendingMessages(evm)
+      setStatus(t('messages.decryptedCount', [n]))
+    } catch (e) {
+      setStatus(t('messages.decryptFailed', [(e as Error).message]))
+    } finally {
+      setBusy(false)
+      await refresh()
+    }
+  }
+
+  const lockedCount = useMemo(() => messages.filter((m) => !m.sentByMe && m.to === me && !(m.decryptStatus === 'ok' && m.plain != null)).length, [messages, me])
 
   const conversations = useMemo(() => {
     const byPeer = new Map<string, MessageRecord[]>()
@@ -129,6 +162,11 @@ export function MessagesPage() {
       <section className="card">
         <div className="card-head">
           <h2>{t('messages.title')}</h2>
+          {lockedCount > 0 && (
+            <button className="btn small" onClick={() => void unlockAll()} disabled={!evm || busy}>
+              {t('messages.decryptAll', [lockedCount])}
+            </button>
+          )}
           <button className="btn ghost small" onClick={() => void sync()} disabled={!evm}>
             {t('messages.refresh')}
           </button>
@@ -199,7 +237,14 @@ export function MessagesPage() {
                   {selectedThread.map((m) => (
                     <div key={m.id} className={m.sentByMe ? 'msg-out' : 'msg-in'}>
                       <div className="msg-body">
-                        {m.plain ?? (m.sentByMe ? t('messages.noPlainSelf') : t('messages.locked'))}
+                        {m.plain ?? (m.sentByMe ? t('messages.noPlainSelf') : (
+                          <>
+                            {m.decryptStatus === 'failed' ? t('messages.decryptFailedLabel') : t('messages.locked')}{' '}
+                            <button className="btn ghost small" disabled={unlocking === m.id} onClick={() => void unlock(m)}>
+                              {unlocking === m.id ? t('messages.unlocking') : t('messages.unlock')}
+                            </button>
+                          </>
+                        ))}
                       </div>
                       <div className="muted small-text">{new Date(m.at).toLocaleString()}</div>
                     </div>

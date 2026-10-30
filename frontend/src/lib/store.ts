@@ -33,18 +33,17 @@ export interface TaskRecord {
   updatedAt: number
 }
 
-// ---- publish tasks (design review R02) ----
-// Persisted right after signing, before submitting: tx hashes + start height +
-// the metadata needed to rebuild the manifest. When the submit result is unknown
-// (timeout / lost response / confirm failure), verify by rescanning hashes —
-// never auto-resend (a same-nonce resend trips the (signer, nonce) dedup ban).
-// Shares the tasks store with archive-watch, ids prefixed 'publish:'.
+// ---- 发布任务（doc/13 R02）----
+// 签名后、提交前落盘：交易 hash + 起始高度 + manifest 重建所需元数据。提交
+// 结果未知（超时/响应丢失/确认失败）时按 hash 续扫核实，绝不自动重发
+//（同 nonce 重发会撞 (signer, nonce) 去重，坑 10）。与 archive-watch 共用
+// tasks store，id 用 'publish:' 前缀隔离。
 export interface PublishTaskRecord {
   id: string // 'publish:' + rootCid
   kind: 'publish'
   rootCid: string
   file: { name: string; size: number; sha256: string; mimeType: string | null }
-  /** manifest assembly overrides (plaintext metadata + encryption block for encrypted uploads) */
+  /** manifest 组装覆盖（加密上传时的明文元数据 + encryption 块） */
   overridesFile: Record<string, unknown> | null
   encryption: unknown | null
   nodes: { cid: string; blake3: string; bytes: number }[]
@@ -105,10 +104,15 @@ export interface VaultRecord {
   createdAt: number
 }
 
-// ---- P4：链上信箱（doc/12 §四）----
+// ---- P4: on-chain mailbox (batch B; R03/R04 extensions) ----
 
-// 一条消息的本地记录。inbox 记录解密后的明文缓存（plain）；outbox（sentByMe）
-// 只在本机有发送时明文，换设备不恢复。
+// One local message record. Inbox records cache the decrypted plaintext
+// (plain); the outbox (sentByMe) holds plaintext only on the sending device.
+// R03: sync (pull on-chain ciphertext) and decryption are separated —
+// decryptStatus tracks each message; failures are retryable singly or in bulk
+// (the cursor means "logs persisted", not "decrypted").
+// R04: chainId/blockNumber/blockHash recorded (cursor isolated by
+// chainId+contract+account).
 export interface MessageRecord {
   id: string // 复合键 `${contract}:${eventId}:${txHash}`（防跨合约/重放歧义）
   eventId: number // MessageSent 事件 id（全局递增）
@@ -120,6 +124,43 @@ export interface MessageRecord {
   txHash: string
   read: boolean // inbox 已读标记
   sentByMe: boolean
+  chainId?: number // R04：链维度（当前 870；老记录缺失按 870 补）
+  blockNumber?: number // R04：所在块（重组排查/审计用）
+  blockHash?: string | null // R04：所在块哈希（checkpoint 核对用）
+  decryptStatus?: 'ok' | 'locked' | 'failed' // R03：老记录缺失按 plain 推导
+  decryptError?: string | null // R03：失败原因（UI 展示/排查）
+}
+
+/** Fill defaults for legacy records (schemaless upgrade: no data migration, normalize on read) */
+export function normalizeMessage(m: MessageRecord): MessageRecord {
+  return {
+    ...m,
+    chainId: m.chainId ?? 870,
+    blockNumber: m.blockNumber ?? 0,
+    blockHash: m.blockHash ?? null,
+    decryptStatus: m.decryptStatus ?? (m.plain != null ? 'ok' : 'locked'),
+    decryptError: m.decryptError ?? null,
+  }
+}
+
+/** Idempotent merge (R03/R04): keeps existing non-empty plain and read=true;
+ * decrypt status takes the better of the two (ok > failed > locked) — log
+ * replays / concurrent scans never wipe plaintext or reset read state */
+export function mergeMessage(existing: MessageRecord | undefined, next: MessageRecord): MessageRecord {
+  if (!existing) return normalizeMessage(next)
+  const rank = { ok: 3, failed: 2, locked: 1 } as const
+  const ex = normalizeMessage(existing)
+  const nx = normalizeMessage(next)
+  const status = rank[nx.decryptStatus!] >= rank[ex.decryptStatus!] ? nx.decryptStatus : ex.decryptStatus
+  return {
+    ...nx,
+    plain: nx.plain ?? ex.plain ?? null,
+    read: nx.read || ex.read,
+    decryptStatus: status,
+    decryptError: status === 'failed' ? (nx.decryptError ?? ex.decryptError ?? null) : null,
+    blockNumber: nx.blockNumber || ex.blockNumber,
+    blockHash: nx.blockHash ?? ex.blockHash,
+  }
 }
 
 // kv 杂项（getLogs 游标等）
@@ -134,6 +175,8 @@ function openDb(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise
   dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
+    // R08: an upgrade blocked by an old connection in another tab fails explicitly (no hang forever); this connection yields and closes on versionchange
+    req.onblocked = () => reject(new Error('indexedDB upgrade blocked by another tab — close other tabs of this app and retry'))
     req.onupgradeneeded = () => {
       const db = req.result
       if (!db.objectStoreNames.contains(MANIFESTS)) db.createObjectStore(MANIFESTS, { keyPath: 'rootCid' })
@@ -144,7 +187,15 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(MESSAGES)) db.createObjectStore(MESSAGES, { keyPath: 'id' })
       if (!db.objectStoreNames.contains(META)) db.createObjectStore(META, { keyPath: 'key' })
     }
-    req.onsuccess = () => resolve(req.result)
+    req.onsuccess = () => {
+      const db = req.result
+      // close this connection when another tab requests an upgrade, so its onblocked never hangs
+      db.onversionchange = () => {
+        db.close()
+        dbPromise = null
+      }
+      resolve(db)
+    }
     req.onerror = () => {
       dbPromise = null
       reject(req.error ?? new Error('indexedDB open failed'))
@@ -153,14 +204,22 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise
 }
 
+// R08: request.onsuccess does not mean persisted — the transaction can still
+// abort (quota / later request failure / explicit abort). Resolve on
+// transaction.oncomplete; reject on abort/error.
 function tx<T>(store: string, mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   return openDb().then(
     (db) =>
       new Promise<T>((resolve, reject) => {
         const t = db.transaction(store, mode)
+        let result!: T
+        t.oncomplete = () => resolve(result)
+        t.onabort = () => reject(t.error ?? new Error('indexedDB transaction aborted'))
+        t.onerror = () => reject(t.error ?? new Error('indexedDB transaction error'))
         const req = run(t.objectStore(store))
-        req.onsuccess = () => resolve(req.result)
-        req.onerror = () => reject(req.error)
+        req.onsuccess = () => {
+          result = req.result
+        }
       }),
   )
 }
@@ -180,8 +239,8 @@ export const deleteManifest = (rootCid: string): Promise<void> =>
 
 // ---- tasks ----
 
-// The tasks store now holds both archive-watch and publish records (id-prefix
-// isolated) — list reads filter by kind so each consumer gets its own shape
+// tasks store 现在混存 archive-watch 与 publish 两类记录（id 前缀隔离）——
+// 列表读取按 kind 过滤，各自的消费者拿各自的形状
 export const listTasks = (): Promise<TaskRecord[]> =>
   tx<unknown[]>(TASKS, 'readonly', (s) => s.getAll() as IDBRequest<unknown[]>).then((all) =>
     all.filter((t): t is TaskRecord => (t as { kind?: string }).kind === 'archive-watch'),
@@ -193,7 +252,7 @@ export const putTask = (task: TaskRecord): Promise<void> =>
 export const deleteTask = (id: string): Promise<void> =>
   tx(TASKS, 'readwrite', (s) => s.delete(id)).then(() => undefined)
 
-// ---- publish tasks (design review R02; shares the tasks store, 'publish:' id prefix) ----
+// ---- 发布任务（doc/13 R02；与 archive-watch 共用 tasks store，'publish:' 前缀隔离）----
 
 export const listPublishTasks = (): Promise<PublishTaskRecord[]> =>
   tx<unknown[]>(TASKS, 'readonly', (s) => s.getAll() as IDBRequest<unknown[]>).then((all) =>
@@ -244,16 +303,83 @@ export const deleteVault = (address: string): Promise<void> =>
 // ---- messages（P4）----
 
 export const listMessages = (): Promise<MessageRecord[]> =>
-  tx<MessageRecord[]>(MESSAGES, 'readonly', (s) => s.getAll() as IDBRequest<MessageRecord[]>)
+  tx<MessageRecord[]>(MESSAGES, 'readonly', (s) => s.getAll() as IDBRequest<MessageRecord[]>).then((all) => all.map(normalizeMessage))
 
+// R03/R08: read-merge-write atomically in one transaction (replays/concurrent scans preserve plaintext and read state)
 export const putMessage = (message: MessageRecord): Promise<void> =>
-  tx(MESSAGES, 'readwrite', (s) => s.put(message)).then(() => undefined)
+  openDb().then(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const t = db.transaction(MESSAGES, 'readwrite')
+        t.oncomplete = () => resolve()
+        t.onabort = () => reject(t.error ?? new Error('indexedDB transaction aborted'))
+        t.onerror = () => reject(t.error ?? new Error('indexedDB transaction error'))
+        const store = t.objectStore(MESSAGES)
+        const getReq = store.get(message.id)
+        getReq.onsuccess = () => {
+          store.put(mergeMessage(getReq.result as MessageRecord | undefined, message))
+        }
+      }),
+  )
 
-// 已读标记（先读后写，避免整条覆盖竞态）
-export const markMessageRead = async (id: string): Promise<void> => {
-  const m = await tx<MessageRecord | undefined>(MESSAGES, 'readonly', (s) => s.get(id) as IDBRequest<MessageRecord | undefined>)
-  if (m && !m.read) await tx(MESSAGES, 'readwrite', (s) => s.put({ ...m, read: true })).then(() => undefined)
-}
+// R08: the message batch and cursor commit in one transaction — a failed batch never advances the cursor
+export const putMessagesWithCursor = (messages: MessageRecord[], cursorKey: string, cursorValue: unknown): Promise<void> =>
+  openDb().then(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const t = db.transaction([MESSAGES, META], 'readwrite')
+        t.oncomplete = () => resolve()
+        t.onabort = () => reject(t.error ?? new Error('indexedDB transaction aborted'))
+        t.onerror = () => reject(t.error ?? new Error('indexedDB transaction error'))
+        const messages_ = t.objectStore(MESSAGES)
+        for (const m of messages) {
+          const getReq = messages_.get(m.id)
+          getReq.onsuccess = () => {
+            messages_.put(mergeMessage(getReq.result as MessageRecord | undefined, m))
+          }
+        }
+        t.objectStore(META).put({ key: cursorKey, value: cursorValue } satisfies MetaRecord)
+      }),
+  )
+
+// Read flag (R08: read-modify-write in one transaction, closing the lost-update window against concurrent putMessage)
+export const markMessageRead = (id: string): Promise<void> =>
+  openDb().then(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const t = db.transaction(MESSAGES, 'readwrite')
+        t.oncomplete = () => resolve()
+        t.onabort = () => reject(t.error ?? new Error('indexedDB transaction aborted'))
+        t.onerror = () => reject(t.error ?? new Error('indexedDB transaction error'))
+        const store = t.objectStore(MESSAGES)
+        const getReq = store.get(id)
+        getReq.onsuccess = () => {
+          const m = getReq.result as MessageRecord | undefined
+          if (m && !m.read) store.put({ ...m, read: true })
+        }
+      }),
+  )
+
+/** Decrypt status update (R03: persist success and failure alike, with the reason; per-message isolation) */
+export const putMessageDecryptResult = (id: string, plain: string | null, error: string | null): Promise<void> =>
+  openDb().then(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const t = db.transaction(MESSAGES, 'readwrite')
+        t.oncomplete = () => resolve()
+        t.onabort = () => reject(t.error ?? new Error('indexedDB transaction aborted'))
+        t.onerror = () => reject(t.error ?? new Error('indexedDB transaction error'))
+        const store = t.objectStore(MESSAGES)
+        const getReq = store.get(id)
+        getReq.onsuccess = () => {
+          const m = getReq.result as MessageRecord | undefined
+          if (m) {
+            const status: MessageRecord['decryptStatus'] = plain != null ? 'ok' : 'failed'
+            store.put(mergeMessage(m, { ...m, plain: plain != null ? plain : null, decryptStatus: status, decryptError: error }))
+          }
+        }
+      }),
+  )
 
 // ---- meta（P4：kv 杂项）----
 

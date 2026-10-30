@@ -15,6 +15,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "fake-indexeddb": "^6.2.7"
+    "fake-indexeddb": "^6.2.7",
+    "viem": "^2.57.13"
   }
 }

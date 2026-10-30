@@ -7,10 +7,10 @@
 // (operator decision, 2026-10-27).
 
 import { createPublicClient, createWalletClient, custom, http, type PublicClient, type WalletClient } from 'viem'
-import { loadConfig } from './config'
-import { autoEvmChain } from './evm'
-import { REGISTRY_ABI } from './registry-abi'
-import type { EvmSigner } from './wallet/types'
+import { loadConfig } from './config.ts'
+import { autoEvmChain } from './evm.ts'
+import { REGISTRY_ABI } from './registry-abi.ts'
+import type { EvmSigner } from './wallet/types.ts'
 import { t } from '../i18n/core.ts'
 
 export interface RegistryEntry {

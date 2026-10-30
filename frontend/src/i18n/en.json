@@ -409,7 +409,13 @@
     "sendFailed": "Send failed: {0}",
     "noKey": "This address has not announced an encryption key — the recipient needs to connect their wallet once (announce is automatic).",
     "locked": "🔒 encrypted (connect the same wallet to decrypt)",
-    "noPlainSelf": "🔒 sent from another device (outbox plaintext is local-only)"
+    "noPlainSelf": "🔒 sent from another device (outbox plaintext is local-only)",
+    "decryptAll": "Decrypt all ({0} locked)",
+    "unlock": "🔓 Decrypt",
+    "unlocking": "Decrypting…",
+    "decryptFailedLabel": "🔒 decryption failed",
+    "decryptFailed": "Decryption failed: {0}",
+    "decryptedCount": "Decrypted {0} message(s)."
   },
   "paywall": {
     "title": "Paid downloads",
