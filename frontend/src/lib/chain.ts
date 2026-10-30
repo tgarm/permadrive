@@ -9,7 +9,7 @@ import { ApiPromise } from '@polkadot/api'
 import type { SubmittableExtrinsic } from '@polkadot/api/types'
 import { PacedHttpProvider, RawRpc, sleep } from './rpc'
 import { tryDecodeRemark } from './dag'
-import { t } from '../i18n'
+import { t } from '../i18n/core.ts'
 
 export interface ExtractResult {
   found: Map<string, Uint8Array> // cidString → encoded node bytes

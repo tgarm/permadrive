@@ -15,10 +15,10 @@ import type { ApiPromise } from '@polkadot/api'
 import type { SubmittableExtrinsic } from '@polkadot/api/types'
 import { submitAndWaitConfirmed } from './chain'
 import { makeRemarkPayload, packFile, type PackedNode } from './dag'
-import type { ManifestV1 } from './manifest'
+import type { Manifest, ManifestEncryption } from './manifest'
 import { sha256Hex } from './bytes'
 import type { SubstrateSigner } from './wallet/types'
-import { t } from '../i18n'
+import { t } from '../i18n/core.ts'
 
 export interface PreparedUpload {
   file: { name: string; size: number; sha256: string; mimeType: string | null }
@@ -49,12 +49,25 @@ export async function estimateFee(api: ApiPromise, totalBytes: number): Promise<
 
 export type PublishStage = 'signing' | 'submitting' | 'scanning' | 'confirming'
 
+/**
+ * Manifest assembly overrides (encrypted uploads): the DAG is packed from the
+ * CIPHERTEXT, so prepared.file holds ciphertext metadata — manifest.file must
+ * be overridden with the plaintext metadata (filenames/sizes are public), and
+ * encryption carries the v2 block. file.sha256 is the plaintext sha256,
+ * checked after decryption.
+ */
+export interface PublishOverrides {
+  file?: Partial<Manifest['file']>
+  encryption?: ManifestEncryption | null
+}
+
 export async function publishPrepared(
   api: ApiPromise,
   prepared: PreparedUpload,
   signer: SubstrateSigner,
   onStage: (stage: PublishStage, detail?: string) => void,
-): Promise<ManifestV1> {
+  overrides: PublishOverrides = {},
+): Promise<Manifest> {
   const remarkTxs = (): SubmittableExtrinsic<'promise'>[] =>
     prepared.nodes.map((n) => api.tx.system.remark(makeRemarkPayload(n.bytes)))
 
@@ -89,11 +102,11 @@ export async function publishPrepared(
 
   const chainName = (await api.rpc.system.chain()).toString()
   return {
-    version: 1,
+    version: 2, // every new upload is v2 (encryption null = plain upload, a superset of v1)
     network: /mainnet/i.test(chainName) ? 'mainnet' : chainName,
     rootCid: prepared.rootCid,
-    file: prepared.file,
-    encryption: null,
+    file: { ...prepared.file, ...overrides.file },
+    encryption: overrides.encryption ?? null,
     compression: null,
     uploader: { address: signer.address },
     nodes: prepared.nodes.map((n) => ({ cid: n.cid, blake3: n.blake3, bytes: n.bytes.length })),

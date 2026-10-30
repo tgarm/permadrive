@@ -10,7 +10,7 @@
 
 import type { ApiPromise } from '@polkadot/api'
 import { publishPrepared, prepareUpload } from './publish'
-import type { ManifestV1 } from './manifest'
+import type { Manifest } from './manifest'
 import type { SubstrateSigner } from './wallet/types'
 
 export interface ManifestPublication {
@@ -19,11 +19,11 @@ export interface ManifestPublication {
   txHash: string
 }
 
-export const manifestFileName = (manifest: ManifestV1): string => `${manifest.rootCid}.manifest.json`
+export const manifestFileName = (manifest: Manifest): string => `${manifest.rootCid}.manifest.json`
 
 export async function publishManifestToChain(
   api: ApiPromise,
-  manifest: ManifestV1,
+  manifest: Manifest,
   signer: SubstrateSigner,
   onStage?: (stage: string, detail?: string) => void,
 ): Promise<ManifestPublication> {

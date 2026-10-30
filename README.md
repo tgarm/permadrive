@@ -18,6 +18,9 @@ Files are packed into IPLD DAGs in the browser and published directly to the Aut
 - **No required backend** — the build output is fully static and hostable anywhere; all dependencies (RPC, indexer) are permissionless public infrastructure with CORS enabled (browser-direct)
 - **Manifest as proof** — a single JSON manifest describes everything needed for retrieval; export / import / share it
 - **Cross-device recovery** — on a new device, the same wallet signature recovers the full file index from the on-chain registry and re-downloads the files
+- **Encrypted files** — opt-in upload encryption: a random data key encrypts the file (AES-256-GCM) before the standard DAG packing, and the key is wrapped with your EVM wallet signature plus an optional passphrase; downloads decrypt automatically with a passphrase dialog as the fallback. Filenames and sizes stay public; the content is yours only (manifest v2, `pdenc-v1`)
+- **On-chain private messages** — end-to-end encrypted mail between addresses (x25519-xsalsa20-poly1305, MetaMask-compatible envelopes or locally derived keypairs). Who talks to whom, when, and ciphertext length are public; only the content is private. Your encryption key is announced automatically when the wallet connects
+- **Paid downloads (escrow)** — sell encrypted files for AI3: payment is held in an escrow contract and released on the buyer's confirmation (or refunded on delivery timeout / within the grace period); the file key is delivered as ciphertext over the private-message channel. Digital-goods mode: buying grants the file itself, there is no DRM
 - **Versioned notes** — append-only text records; every save publishes a new immutable version and registers it in the on-chain registry (the version chain survives any device; unchanged content re-saving is free under content addressing)
 - **Encrypted vault** — a password manager whose entries are AES-256-GCM encrypted as one envelope before publishing; the data key is wrapped twice — by your passphrase (exportable keystore file, the universal recovery path) and by an EVM wallet signature (passphrase-free unlock on new devices). Only ciphertext ever reaches the chain. Full principles, threat model and do-it-yourself verification: [VAULT.md](VAULT.md)
 
@@ -31,6 +34,7 @@ scripts/
   poc/                  End-to-end protocol scripts: pack & publish / scan & retrieve / account generation (shared lib)
   p2/                   FileRegistry v1 compile / deploy / interaction; XDM cross-domain funding helper
   p3/                   FileRegistryV2 compile / deploy / semantic selftest / v1→v2 migration; vault crypto format selftest
+  p4/                   favicon PNG generator + reproducibility check; file-encryption selftest; Mailbox deploy + selftest; Paywall deploy + full-state-machine selftest
 ```
 
 ## Quick start (frontend)
@@ -86,13 +90,16 @@ npm run vault-crypto      # offline vault envelope/keystore crypto selftest (no 
 | Contract | Address | Status |
 |---|---|---|
 | FileRegistry v2 | `0x79a22e5dc2e0613d8e9b491a1a51038b9197b185` | Active; register charges a dev fee: `max(0.01 AI3, size × ~1.05e11 wei)`, overpayment is refunded |
+| Mailbox | `0x3446abe95edc17e4056a28d7c5fb10d579395200` | Active; on-chain private messages — `announceEncryptionKey` + `send` (permissionless, ciphertext ≤ 8 KiB) |
+| Paywall | `0xb51be7a5cc1a03fd51892d9db1fc942aa164405a` | Active; paid-download escrow (3-day delivery timeout / 3-day grace), dev fee 10% taken only on release |
+| Paywall (test) | `0x4db00db74769a0e8d38654bbe20144668c105acf` | Active; 5-minute timeouts — for the selftest to walk the full state machine |
 | FileRegistry v1 | `0x1751f7534b85417da6e093a2e85b4b7b90ee2e4a` | Frozen, read-only |
 
 Deployment records (tx / block) live in [contracts/deployments.json](contracts/deployments.json); explorer: <https://explorer.auto-evm.mainnet.autonomys.xyz>
 
 ## Notes
 
-- **On-chain data is public by default** — anyone can read it. "My files" and Notes publish in the clear (Notes are plaintext by design; private text belongs in the Vault, whose envelope is ciphertext). Index ownership is not access control; do not publish anything you don't want public.
+- **On-chain data is public by default** — anyone can read it. Plain "My files" uploads and Notes publish in the clear (Notes are plaintext by design; private text belongs in the Vault, whose envelope is ciphertext, or in an encrypted-file upload, whose content is ciphertext). File encryption protects the content only — filenames, sizes and ciphertext stay public. Index ownership is not access control; do not publish anything you don't want public.
 - **The vault keystore is the only universal recovery path** — wallet-signature unlock depends on reproducible signatures (verified for local EVM keys; most extension wallets work, some may not). Losing both the wallet AND the keystore file means the ciphertext stays on-chain forever but can never be opened.
 - **Public RPCs are rate-limited** — the scripts throttle and back off; do not hammer public nodes with concurrency.
 - **Confirmation policy** — publishes confirm at 12-block depth + canonical check (Autonomys testnet finality lag can reach 15 days; never wait for finalized).

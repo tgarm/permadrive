@@ -9,7 +9,7 @@
 // new CID and destroy the dedup idempotency — version order derives from the
 // on-chain heights instead.
 
-import { t } from '../i18n'
+import { t } from '../i18n/core.ts'
 
 export const NOTE_FILE_PREFIX = 'pdnote-'
 

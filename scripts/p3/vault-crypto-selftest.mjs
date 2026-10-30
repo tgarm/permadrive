@@ -82,10 +82,10 @@ function ok(cond, label) {
 
 const addr = '0x47ce1b1a2d6bb34fdbaf0a772694f72ba3d0668e'
 const ENTRIES = JSON.stringify({
-  entries: [{ id: 'e1', title: '例站', username: 'simon', password: 'p@ss', url: 'https://example.com', notes: '', createdAt: 1, updatedAt: 1 }],
+  entries: [{ id: 'e1', title: 'Example', username: 'simon', password: 'p@ss', url: 'https://example.com', notes: '', createdAt: 1, updatedAt: 1 }],
 })
 
-// ---- 1. 信封封缄/开缄 ----
+// ---- 1. envelope seal/open ----
 {
   const k = randomBytes(32)
   const cipher = await sealPayload(k, ENTRIES)
@@ -107,7 +107,7 @@ const ENTRIES = JSON.stringify({
   ok(wrongKey, 'wrong-key rejection: GCM auth fails')
 }
 
-// ---- 2. keystore（口令通道）----
+// ---- 2. keystore (passphrase channel) ----
 {
   const k = randomBytes(32)
   const wrap = await wrapWithPassphrase(k, 'correct horse battery staple')
@@ -121,7 +121,7 @@ const ENTRIES = JSON.stringify({
   ok(bad, 'keystore wrong-passphrase rejection')
 }
 
-// ---- 3. 签名通道（确定性前提 + 多收件人）----
+// ---- 3. signature channel (determinism prerequisite + multi-channel) ----
 {
   const mnemonic = generateMnemonic(english)
   const account = mnemonicToAccount(mnemonic)
@@ -147,7 +147,7 @@ const ENTRIES = JSON.stringify({
   ok(Buffer.from(await unwrapPassphrase(envelope.wrappedKeys[0], 'backup pass')).equals(Buffer.from(k)), 'dual channels: keystore and signature wrap each unwrap independently')
 }
 
-// ---- 4. 笔记命名约定（前端 lib/notes.ts 实码）----
+// ---- 4. note naming convention (the real frontend lib/notes.ts) ----
 {
   const id = newNoteIdOf()
   const name = noteFileName(id, 'Hello 世界: deploy notes!')

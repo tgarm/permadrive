@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!--
+    PermaDrive favicon：圆角方底 + 品牌色 P（环形碗部，兼作永久循环 ∞ 意象）。
+    底色跟随系统明暗（styles.css 的 --accent 两主题令牌）；字形恒白。
+    PNG 回退（favicon-32.png / apple-touch-icon.png）由 scripts/p4/make-favicon.mjs
+    按同一几何生成，勿手工替换。
+  -->
+  <style>
+    .bg { fill: #0969da; }
+    @media (prefers-color-scheme: dark) { .bg { fill: #4f9cf7; } }
+  </style>
+  <rect class="bg" width="48" height="48" rx="10.5" />
+  <path fill="#ffffff" d="M 13.5 34 L 13.5 14 A 4 4 0 0 1 21.5 14 L 21.5 34 A 4 4 0 0 1 13.5 34 Z" />
+  <path fill="#ffffff" fill-rule="evenodd" d="M 36.75 17.5 A 9.25 9.25 0 1 1 18.25 17.5 A 9.25 9.25 0 1 1 36.75 17.5 Z M 31.5 17.5 A 4 4 0 1 1 23.5 17.5 A 4 4 0 1 1 31.5 17.5 Z" />
+</svg>

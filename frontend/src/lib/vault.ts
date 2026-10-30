@@ -5,7 +5,7 @@
 // valid for all versions; wrappedKeys carry over unchanged across versions).
 
 import { fromHex } from './bytes'
-import { t } from '../i18n'
+import { t } from '../i18n/core.ts'
 import {
   sealPayload,
   tryUnwrapWithSignature,

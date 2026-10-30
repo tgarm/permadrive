@@ -18,8 +18,8 @@
 // encrypting at the envelope layer keeps the DAG standard-encoded — the
 // retrieval pipeline needs zero changes and the manifest keeps encryption: null.
 
-import { fromHex, toHex } from './bytes'
-import { t } from '../i18n'
+import { fromHex, toHex } from './bytes.ts'
+import { t } from '../i18n/core.ts'
 
 export interface WrappedKey {
   mode: 'signature-v1' | 'passphrase-v1'

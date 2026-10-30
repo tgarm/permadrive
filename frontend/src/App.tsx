@@ -1,22 +1,30 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { WalletProvider } from '@autonomys/auto-wallet-react'
 import { ChainProvider } from './chain-context'
-import { SignerProvider } from './signer-context'
+import { SignerProvider, useSigner } from './signer-context'
 import { LanguageSelect } from './components/LanguageSelect'
 import { WalletBar } from './components/WalletBar'
 import { ThemeToggle } from './components/ThemeToggle'
 import { FilesPage } from './pages/FilesPage'
+import { MessagesPage } from './pages/MessagesPage'
 import { NotesPage } from './pages/NotesPage'
 import { VaultPage } from './pages/VaultPage'
 import { AboutPage } from './pages/AboutPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { ensureAnnounced } from './lib/mailbox'
 import { useI18n } from './i18n'
 
-type Tab = 'files' | 'notes' | 'vault' | 'about' | 'settings'
+type Tab = 'files' | 'messages' | 'notes' | 'vault' | 'about' | 'settings'
 
 function Shell() {
   const [tab, setTab] = useState<Tab>('files')
   const { t } = useI18n() // each component subscribes to locale changes (same convention as xdm-bridge)
+  const { evm } = useSigner()
+  // Announce the encryption pubkey automatically when a wallet connects
+  // (idempotent: a matching registration costs zero transactions)
+  useEffect(() => {
+    if (evm) void ensureAnnounced(evm).catch(() => {})
+  }, [evm?.address])
   return (
     <div className="app">
       <header className="app-header">
@@ -37,6 +45,9 @@ function Shell() {
         <button className={tab === 'files' ? 'tab active' : 'tab'} onClick={() => setTab('files')}>
           {t('app.nav.files')}
         </button>
+        <button className={tab === 'messages' ? 'tab active' : 'tab'} onClick={() => setTab('messages')}>
+          {t('app.nav.messages')}
+        </button>
         <button className={tab === 'notes' ? 'tab active' : 'tab'} onClick={() => setTab('notes')}>
           {t('app.nav.notes')}
         </button>
@@ -53,6 +64,8 @@ function Shell() {
       <main>
         {tab === 'files' ? (
           <FilesPage />
+        ) : tab === 'messages' ? (
+          <MessagesPage />
         ) : tab === 'notes' ? (
           <NotesPage />
         ) : tab === 'vault' ? (

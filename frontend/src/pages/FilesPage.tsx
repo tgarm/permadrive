@@ -1,24 +1,36 @@
-// My Files: upload (pack -> fee confirmation -> sign -> confirm -> background
+// My Files: upload (pack → fee confirmation → sign → confirm → background
 // archive watch), download/retrieval, manifest import/export. The manifest
-// collection lives in IndexedDB (keyed by rootCid); archive (indexer mapping)
-// progress is local task state, not part of the manifest.
-// Row action "Sync registry" (re-publishes the manifest to the DSN + registers
-// it in FileRegistry); toolbar "Recover from on-chain registry" (reads the
-// Registry -> block-scans to rebuild the manifest collection).
+// set lives in IndexedDB (rootCid key); archive (indexer mapping) progress is
+// local task state, never part of the manifest.
+// Row action "sync to the on-chain registry" (republish the manifest + the
+// FileRegistry entry) and "recover from the on-chain registry" (read the
+// registry → block scan → restore the manifest set).
+// Encrypted upload: K + AES-GCM → the ciphertext is packed into the standard
+// DAG → the manifest v2 encryption block. Download decrypts via the signature
+// channel first, falling back to a passphrase dialog.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useChain } from '../chain-context'
 import { useSigner } from '../signer-context'
 import { Hint } from '../components/Hint'
-import { formatBytes } from '../lib/bytes'
+import { formatBytes, sha256Hex } from '../lib/bytes'
 import { loadConfig } from '../lib/config'
-import { migrateManifest, type ManifestV1 } from '../lib/manifest'
-import { estimateFee, prepareUpload, publishPrepared, type PreparedUpload, type PublishStage } from '../lib/publish'
+import { migrateManifest, type Manifest } from '../lib/manifest'
+import { estimateFee, prepareUpload, publishPrepared, type PreparedUpload, type PublishOverrides, type PublishStage } from '../lib/publish'
 import { retrieveFile } from '../lib/retrieve'
 import { publishManifestToChain } from '../lib/manifestPublish'
 import { recoverManifestFromHint } from '../lib/manifestRecover'
 import { fetchEntries, quoteRegisterFee, registerFile } from '../lib/registry'
 import { IndexerClient } from '../lib/indexer'
+import { signEvmMessage } from '../lib/vault'
+import {
+  addPassphraseChannel,
+  addSignatureChannel,
+  decryptFileBytes,
+  requireChannel,
+  startEncryption,
+  type EncryptSession,
+} from '../lib/fileCrypto'
 import {
   deleteManifest,
   deleteTask,
@@ -32,9 +44,11 @@ import {
   type RegistryRecord,
   type TaskRecord,
 } from '../lib/store'
+import { saveBlob } from '../lib/download'
+import { PaywallSection } from './PaywallSection'
 import { nodeCount, t, useI18n } from '../i18n'
 
-const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 // single-file limit: larger files need chunked upload (not implemented yet)
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 // per-file cap; larger files need chunking (a later version)
 
 interface UploadSession {
   fileName: string
@@ -44,37 +58,35 @@ interface UploadSession {
   error?: string
   prepared?: PreparedUpload
   fee?: { shannons: bigint; ai3: number }
+  /** Encrypted upload session: plainSha256/plainSize/plainMimeType override manifest.file metadata; encSession gets wrap channels appended at confirm */
+  encrypt?: boolean
+  plainSha256?: string
+  plainSize?: number
+  plainMimeType?: string | null
+  encSession?: EncryptSession
 }
 
 type RowBusy = Record<string, string>
-
-function saveBlob(bytes: Uint8Array, name: string, mimeType: string | null): void {
-  // Copy into a standalone ArrayBuffer to work around TS's ArrayBufferLike constraint on BlobPart
-  const copy = new Uint8Array(bytes.length)
-  copy.set(bytes)
-  const blob = new Blob([copy], { type: mimeType ?? 'application/octet-stream' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  a.click()
-  URL.revokeObjectURL(url)
-}
 
 export function FilesPage() {
   const { t } = useI18n()
   const { connect } = useChain()
   const { active: activeSigner, evm: evmSigner } = useSigner()
-  const [manifests, setManifests] = useState<ManifestV1[]>([])
+  const [manifests, setManifests] = useState<Manifest[]>([])
   const [tasks, setTasks] = useState<TaskRecord[]>([])
   const [registryRecords, setRegistryRecords] = useState<RegistryRecord[]>([])
   const [upload, setUpload] = useState<UploadSession | null>(null)
   const [rowBusy, setRowBusy] = useState<RowBusy>({})
-  const [syncing, setSyncing] = useState<Set<string>>(new Set()) // rootCids with a sync in flight (explicit state — never match on copy text)
+  const [syncing, setSyncing] = useState<Set<string>>(new Set()) // rootCids with a sync in flight (explicit state, never matched by copy)
   const [notice, setNotice] = useState<string | null>(null)
   const [recoverState, setRecoverState] = useState<string | null>(null)
   const [recoverBusy, setRecoverBusy] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  const [encryptOn, setEncryptOn] = useState(false)
+  const [uploadPassphrase, setUploadPassphrase] = useState('')
+  // passphrase fallback dialog for download decryption (suspends the decrypt promise)
+  const [passPrompt, setPassPrompt] = useState<{ resolve: (v: string | null) => void } | null>(null)
+  const [passPromptValue, setPassPromptValue] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
   const watching = useRef(new Set<string>())
@@ -87,7 +99,7 @@ export function FilesPage() {
   }, [])
 
   const watchArchive = useCallback(
-    async (manifest: ManifestV1) => {
+    async (manifest: Manifest) => {
       if (watching.current.has(manifest.rootCid)) return
       watching.current.add(manifest.rootCid)
       const task: TaskRecord = {
@@ -102,8 +114,7 @@ export function FilesPage() {
       }
       await putTask(task)
       await refresh()
-      // The indexer poll runs as a background task so it never blocks the UI
-      // (observed 100s–2h; the data is already retrievable on-chain at this point)
+      // indexer polling runs as a background task — it must not block the UI (measured 100s–2h; the data is retrievable on-chain meanwhile)
       const indexer = new IndexerClient(loadConfig().indexerUrl)
       try {
         const { found, pending } = await indexer.pollUntilIndexed(
@@ -124,7 +135,7 @@ export function FilesPage() {
         task.updatedAt = Date.now()
         await putTask(task)
       } catch {
-        // If the poll crashes, keep the task record — it restarts on the next page load
+        // a polling crash keeps the task record; the next page visit restarts it
       } finally {
         indexer.close()
         watching.current.delete(manifest.rootCid)
@@ -136,7 +147,7 @@ export function FilesPage() {
 
   useEffect(() => {
     void refresh().then(async () => {
-      // Restart unfinished archive watches (resumes after refresh/close)
+      // restart unfinished archive watches (they survive reload/close)
       const [ts, ms] = [await listTasks(), await listManifests()]
       for (const tk of ts.filter((x) => !x.done)) {
         const manifest = ms.find((m) => m.rootCid === tk.id) ?? (await getManifest(tk.id))
@@ -150,6 +161,31 @@ export function FilesPage() {
     setNotice(null)
     if (file.size > MAX_UPLOAD_BYTES) {
       setUpload({ fileName: file.name, fileSize: file.size, stage: 'error', error: t('files.maxSizeError', [formatBytes(MAX_UPLOAD_BYTES)]) })
+      return
+    }
+    if (encryptOn) {
+      if (!evmSigner) {
+        setUpload({ fileName: file.name, fileSize: file.size, stage: 'error', error: t('files.encryptNeedEvm') })
+        return
+      }
+      // Encrypted path: K + GCM (no signer needed) → the ciphertext is packed
+      // into the standard DAG; wrap channels are appended at confirm time
+      // (determinism self-check + optional passphrase)
+      setUpload({ fileName: file.name, fileSize: file.size, stage: 'packing' })
+      try {
+        const plain = new Uint8Array(await file.arrayBuffer())
+        const plainSha256 = await sha256Hex(plain)
+        const encSession = await startEncryption(plain)
+        const cipherCopy = new Uint8Array(encSession.cipher.length)
+        cipherCopy.set(encSession.cipher)
+        const cipherFile = new File([cipherCopy], file.name, { type: file.type || 'application/octet-stream' })
+        const prepared = await prepareUpload(cipherFile)
+        const api = await connect()
+        const fee = await estimateFee(api, prepared.totalBytes)
+        setUpload((u) => (u ? { ...u, prepared, fee, encrypt: true, plainSha256, plainSize: file.size, plainMimeType: file.type || null, encSession, stage: 'awaiting-confirm' } : u))
+      } catch (e) {
+        setUpload((u) => (u ? { ...u, stage: 'error', error: (e as Error).message } : u))
+      }
       return
     }
     setUpload({ fileName: file.name, fileSize: file.size, stage: 'packing' })
@@ -172,11 +208,31 @@ export function FilesPage() {
     }
     try {
       const api = await connect()
-      const manifest = await publishPrepared(api, u.prepared, activeSigner, (stage, detail) =>
-        setUpload((cur) => (cur ? { ...cur, stage, detail } : cur)),
+      let overrides: PublishOverrides = {}
+      if (u.encrypt) {
+        if (!u.encSession || !evmSigner) {
+          setUpload({ ...u, stage: 'error', error: t('files.encryptNeedEvm') })
+          return
+        }
+        setUpload((cur) => (cur ? { ...cur, stage: 'signing', detail: t('stage.keyWrap') } : cur))
+        // Signature channel (determinism self-check; always true for local
+        // keys) + optional passphrase channel; an injected wallet that fails
+        // the check with no passphrase → requireChannel throws and prompts
+        await addSignatureChannel(u.encSession, evmSigner.address, (msg) => signEvmMessage(evmSigner, msg))
+        if (uploadPassphrase) await addPassphraseChannel(u.encSession, uploadPassphrase)
+        requireChannel(u.encSession)
+        overrides = { file: { sha256: u.plainSha256, size: u.plainSize, mimeType: u.plainMimeType }, encryption: u.encSession.encryption }
+      }
+      const manifest = await publishPrepared(
+        api,
+        u.prepared,
+        activeSigner,
+        (stage, detail) => setUpload((cur) => (cur ? { ...cur, stage, detail } : cur)),
+        overrides,
       )
       await putManifest(manifest)
       setUpload(null)
+      setUploadPassphrase('')
       setNotice(t('files.publishedNotice', [manifest.txs[0].height, manifest.txs[0].txHash.slice(0, 18) + '…']))
       void watchArchive(manifest)
       await refresh()
@@ -185,12 +241,35 @@ export function FilesPage() {
     }
   }
 
-  const download = async (manifest: ManifestV1) => {
+  // Passphrase fallback dialog for download decryption: promise-based, the decrypt flow awaits it; cancel resolves null
+  const openPassphrasePrompt = (): Promise<string | null> =>
+    new Promise((resolve) => {
+      setPassPromptValue('')
+      setPassPrompt({ resolve })
+    })
+
+  const download = async (manifest: Manifest) => {
     setNotice(null)
     setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.retrieving') }))
     try {
       const api = await connect()
       const result = await retrieveFile(api, manifest)
+      if (manifest.encryption) {
+        // v2 encrypted file: verify ciphertext integrity first (retrieve checks
+        // cipherSha256/cipherSize), then decrypt and check the plaintext sha256
+        // (manifest.file.sha256)
+        if (!result.sha256Match) throw new Error(t('files.cipherIntegrityFail'))
+        setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.decrypting') }))
+        const signMessage = evmSigner ? (msg: string) => signEvmMessage(evmSigner, msg) : null
+        const plain = await decryptFileBytes(result.bytes, manifest.encryption, signMessage, openPassphrasePrompt)
+        const plainSha = await sha256Hex(plain)
+        saveBlob(plain, manifest.file.name, manifest.file.mimeType)
+        setRowBusy((b) => ({
+          ...b,
+          [manifest.rootCid]: plainSha === manifest.file.sha256 ? t('files.sha256Match', [plainSha.slice(0, 16)]) : t('files.sha256Mismatch', [plainSha]),
+        }))
+        return
+      }
       saveBlob(result.bytes, manifest.file.name, manifest.file.mimeType)
       setRowBusy((b) => ({
         ...b,
@@ -213,16 +292,16 @@ export function FilesPage() {
     }
   }
 
-  const exportManifest = (manifest: ManifestV1) => {
+  const exportManifest = (manifest: Manifest) => {
     saveBlob(new TextEncoder().encode(JSON.stringify(manifest, null, 2)), `${manifest.file.name}.manifest.json`, 'application/json')
   }
 
-  // ---- on-chain registry (FileRegistry on Auto-EVM) ----
+  // ---- On-chain registry (FileRegistry on Auto-EVM) ----
 
   const syncedRootCids = new Set(registryRecords.map((r) => r.rootCid))
 
-  // Sync = re-publish the manifest to the DSN (Substrate signature) + register it in the Registry (EVM signature)
-  const syncToRegistry = async (manifest: ManifestV1) => {
+  // Sync = republish the manifest into the DSN (Substrate signature) + registry entry (EVM signature)
+  const syncToRegistry = async (manifest: Manifest) => {
     setNotice(null)
     if (!activeSigner) {
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.needSubstrate') }))
@@ -242,7 +321,7 @@ export function FilesPage() {
       const api = await connect()
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('stage.packingManifest') }))
       const publication = await publishManifestToChain(api, manifest, activeSigner, (stage, detail) => {
-        // The manifest publish has its own progress copy (emphasizing the manifest file itself)
+        // manifest publication uses different progress copy than content upload (it emphasizes the manifest itself)
         const text = {
           signing: t('stage.manifestSigning'),
           submitting: t('stage.manifestSubmitting'),
@@ -253,7 +332,7 @@ export function FilesPage() {
         setRowBusy((b) => ({ ...b, [manifest.rootCid]: detail ? `${text} ${detail}` : text }))
       })
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.manifestPublished', [publication.height]) }))
-      // dev fee = max(minFee, 10% of the storage fee estimate); show the quote before paying
+      // dev fee = max(minFee, 10% of the storage-fee estimate); quoted before payment
       const fee = await quoteRegisterFee(manifest.file.size)
       const feeAi3 = (Number(fee) / 1e18).toFixed(4)
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.registering', [feeAi3]) }))
@@ -292,8 +371,7 @@ export function FilesPage() {
     }
   }
 
-  // Recover = read Registry entries -> block-scan to rebuild the manifests -> store
-  // locally (the main cross-device recovery path)
+  // Recover = read registry entries → block scan to restore manifests → store (the cross-device main path)
   const recoverFromRegistry = async () => {
     setNotice(null)
     if (!evmSigner) {
@@ -347,7 +425,7 @@ export function FilesPage() {
     }
   }
 
-  const removeManifest = async (manifest: ManifestV1) => {
+  const removeManifest = async (manifest: Manifest) => {
     if (!window.confirm(t('files.deleteConfirm', [manifest.file.name]))) return
     await deleteManifest(manifest.rootCid)
     await deleteTask(manifest.rootCid)
@@ -390,6 +468,14 @@ export function FilesPage() {
           <span className="muted">{t('files.dropHint', [formatBytes(MAX_UPLOAD_BYTES)])}</span>
         </div>
 
+        <div className="encrypt-toggle-row">
+          <label>
+            <input type="checkbox" checked={encryptOn} onChange={(e) => setEncryptOn(e.target.checked)} />
+            <span>🔒 {t('files.encryptToggle')}</span>
+          </label>
+          <Hint>{t('files.encryptToggleHint')}</Hint>
+        </div>
+
         {upload && (
           <div className="upload-session">
             <div className="upload-file">
@@ -410,7 +496,25 @@ export function FilesPage() {
                   <span>{t('files.feeEstimate')}</span>
                   <span>≈ {upload.fee.ai3.toFixed(4)} AI3</span>
                 </div>
+                {upload.encrypt && (
+                  <>
+                    <div className="kv">
+                      <span>{t('files.encryptionLabel')}</span>
+                      <span>🔒 {t('files.encryptedBadge')}</span>
+                    </div>
+                    <div className="kv">
+                      <span>{t('files.passphraseChannel')}</span>
+                      <input
+                        type="password"
+                        value={uploadPassphrase}
+                        placeholder={t('files.passphrasePlaceholder')}
+                        onChange={(e) => setUploadPassphrase(e.target.value)}
+                      />
+                    </div>
+                  </>
+                )}
                 <p className="warning">{t('files.warningPermanent')}</p>
+                {upload.encrypt && <p className="warning">{t('files.encryptPrivacy')}</p>}
                 <div className="row">
                   <button className="btn primary" onClick={() => void confirmUpload()}>
                     {t('files.signAndUpload')}
@@ -491,7 +595,10 @@ export function FilesPage() {
                 return (
                   <tr key={m.rootCid}>
                     <td>
-                      <div className="file-name">{m.file.name}</div>
+                      <div className="file-name">
+                        {m.encryption ? '🔒 ' : ''}
+                        {m.file.name}
+                      </div>
                       <div className="mono small-text muted">{m.rootCid.slice(0, 24)}…</div>
                       {rowBusy[m.rootCid] && <div className="small-text row-status">{rowBusy[m.rootCid]}</div>}
                     </td>
@@ -542,11 +649,61 @@ export function FilesPage() {
           <Hint>{t('files.hintRegistry')}</Hint>
         </p>
       </section>
+
+      <PaywallSection getPassphrase={openPassphrasePrompt} />
+
+      {passPrompt && (
+        <div
+          className="modal-overlay"
+          onMouseDown={() => {
+            passPrompt.resolve(null)
+            setPassPrompt(null)
+          }}
+        >
+          <div className="modal-card" onMouseDown={(e) => e.stopPropagation()}>
+            <h3>{t('files.passphrasePromptTitle')}</h3>
+            <p className="muted small-text">{t('files.passphrasePromptBody')}</p>
+            <input
+              type="password"
+              autoFocus
+              value={passPromptValue}
+              onChange={(e) => setPassPromptValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && passPromptValue) {
+                  passPrompt.resolve(passPromptValue)
+                  setPassPrompt(null)
+                }
+              }}
+            />
+            <div className="row">
+              <button
+                className="btn primary"
+                disabled={!passPromptValue}
+                onClick={() => {
+                  passPrompt.resolve(passPromptValue)
+                  setPassPrompt(null)
+                }}
+              >
+                {t('common.ok')}
+              </button>
+              <button
+                className="btn ghost"
+                onClick={() => {
+                  passPrompt.resolve(null)
+                  setPassPrompt(null)
+                }}
+              >
+                {t('common.cancel')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-// 上传会话进度行：stage 是稳定标识，文案统一走字典（stage.*）
+// Upload session progress line: stage is a stable identifier, copy comes from the dictionary (stage.*)
 function stageText(stage: UploadSession['stage']): string {
   const map: Record<string, string> = {
     packing: 'stage.packing',

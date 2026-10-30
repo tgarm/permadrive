@@ -9,17 +9,22 @@
 // metadata (the authoritative version chain lives in the on-chain registry);
 // vault records keep the latest envelope (ciphertext) + version metadata —
 // decrypted entries live in memory only and never reach IndexedDB.
+// (v4): messages (on-chain mailbox local cache) + meta (kv: the getLogs
+// cursor). Received mail is cached as plaintext after decryption; the outbox
+// plaintext is local-only by design (not restored on a new device).
 
-import type { ManifestV1 } from './manifest'
+import type { Manifest } from './manifest'
 import type { VaultEnvelopeV1 } from './vaultCrypto'
 
 const DB_NAME = 'permadrive'
-const DB_VERSION = 3
+const DB_VERSION = 4
 const MANIFESTS = 'manifests'
 const TASKS = 'tasks'
 const REGISTRY = 'registry'
 const NOTES = 'notes'
 const VAULTS = 'vaults'
+const MESSAGES = 'messages'
+const META = 'meta'
 
 export interface TaskRecord {
   id: string // rootCid
@@ -93,6 +98,8 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(REGISTRY)) db.createObjectStore(REGISTRY, { keyPath: 'rootCid' })
       if (!db.objectStoreNames.contains(NOTES)) db.createObjectStore(NOTES, { keyPath: 'id' })
       if (!db.objectStoreNames.contains(VAULTS)) db.createObjectStore(VAULTS, { keyPath: 'address' })
+      if (!db.objectStoreNames.contains(MESSAGES)) db.createObjectStore(MESSAGES, { keyPath: 'id' })
+      if (!db.objectStoreNames.contains(META)) db.createObjectStore(META, { keyPath: 'key' })
     }
     req.onsuccess = () => resolve(req.result)
     req.onerror = () => {
@@ -117,12 +124,12 @@ function tx<T>(store: string, mode: IDBTransactionMode, run: (s: IDBObjectStore)
 
 // ---- manifests ----
 
-export const listManifests = (): Promise<ManifestV1[]> => tx<ManifestV1[]>(MANIFESTS, 'readonly', (s) => s.getAll() as IDBRequest<ManifestV1[]>)
+export const listManifests = (): Promise<Manifest[]> => tx<Manifest[]>(MANIFESTS, 'readonly', (s) => s.getAll() as IDBRequest<Manifest[]>)
 
-export const getManifest = (rootCid: string): Promise<ManifestV1 | undefined> =>
-  tx<ManifestV1 | undefined>(MANIFESTS, 'readonly', (s) => s.get(rootCid) as IDBRequest<ManifestV1 | undefined>)
+export const getManifest = (rootCid: string): Promise<Manifest | undefined> =>
+  tx<Manifest | undefined>(MANIFESTS, 'readonly', (s) => s.get(rootCid) as IDBRequest<Manifest | undefined>)
 
-export const putManifest = (manifest: ManifestV1): Promise<void> =>
+export const putManifest = (manifest: Manifest): Promise<void> =>
   tx(MANIFESTS, 'readwrite', (s) => s.put(manifest)).then(() => undefined)
 
 export const deleteManifest = (rootCid: string): Promise<void> =>
@@ -172,3 +179,48 @@ export const putVault = (vault: VaultRecord): Promise<void> =>
 
 export const deleteVault = (address: string): Promise<void> =>
   tx(VAULTS, 'readwrite', (s) => s.delete(address.toLowerCase())).then(() => undefined)
+
+// ---- messages (P4) ----
+
+// A message's local record. Inbox records cache the decrypted plaintext
+// (plain); outbox (sentByMe) plaintext exists only on the sending machine.
+export interface MessageRecord {
+  id: string // composite key `${contract}:${eventId}:${txHash}`
+  eventId: number // MessageSent event id (globally increasing)
+  from: string // lowercase address
+  to: string // lowercase address
+  content: string // ciphertext envelope JSON (BoxEnvelope)
+  plain: string | null // plaintext cache (inbox after decrypt / outbox at send time)
+  at: number // on-chain block timestamp (ms)
+  txHash: string
+  read: boolean // inbox read marker
+  sentByMe: boolean
+}
+
+// kv misc (the getLogs cursor etc.)
+export interface MetaRecord {
+  key: string
+  value: unknown
+}
+
+export const listMessages = (): Promise<MessageRecord[]> =>
+  tx<MessageRecord[]>(MESSAGES, 'readonly', (s) => s.getAll() as IDBRequest<MessageRecord[]>)
+
+export const putMessage = (message: MessageRecord): Promise<void> =>
+  tx(MESSAGES, 'readwrite', (s) => s.put(message)).then(() => undefined)
+
+// Read marker (read then write, avoiding full-record overwrite races)
+export const markMessageRead = async (id: string): Promise<void> => {
+  const m = await tx<MessageRecord | undefined>(MESSAGES, 'readonly', (s) => s.get(id) as IDBRequest<MessageRecord | undefined>)
+  if (m && !m.read) await tx(MESSAGES, 'readwrite', (s) => s.put({ ...m, read: true })).then(() => undefined)
+}
+
+// ---- meta (P4: kv misc) ----
+
+export const getMeta = async <T>(key: string): Promise<T | undefined> => {
+  const rec = await tx<MetaRecord | undefined>(META, 'readonly', (s) => s.get(key) as IDBRequest<MetaRecord | undefined>)
+  return rec?.value as T | undefined
+}
+
+export const putMeta = (key: string, value: unknown): Promise<void> =>
+  tx(META, 'readwrite', (s) => s.put({ key, value })).then(() => undefined)

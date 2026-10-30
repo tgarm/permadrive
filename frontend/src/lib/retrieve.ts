@@ -10,9 +10,9 @@
 import type { ApiPromise } from '@polkadot/api'
 import { extractRemarkNodes } from './chain'
 import { assemble } from './dag'
-import type { ManifestV1 } from './manifest'
+import type { Manifest } from './manifest'
 import { sha256Hex } from './bytes'
-import { t } from '../i18n'
+import { t } from '../i18n/core.ts'
 
 export interface RetrieveResult {
   bytes: Uint8Array
@@ -23,7 +23,7 @@ export interface RetrieveResult {
 
 const MAX_PARENT_HOPS = 4
 
-export async function retrieveFile(api: ApiPromise, manifest: ManifestV1): Promise<RetrieveResult> {
+export async function retrieveFile(api: ApiPromise, manifest: Manifest): Promise<RetrieveResult> {
   const nodeBytesByCid = new Map<string, Uint8Array>()
   const wanted = new Set(manifest.nodes.map((n) => n.cid))
   for (const { blockHash } of manifest.txs) {
@@ -43,5 +43,12 @@ export async function retrieveFile(api: ApiPromise, manifest: ManifestV1): Promi
     return b
   })
   const sha256 = await sha256Hex(bytes)
+  // v2 encrypted manifests: bytes ARE the ciphertext — integrity is checked
+  // against cipherSha256/cipherSize (decryption + plaintext sha256 check live
+  // in FilesPage download(), see fileCrypto)
+  if (manifest.encryption) {
+    const match = sha256 === manifest.encryption.cipherSha256 && bytes.length === manifest.encryption.cipherSize
+    return { bytes, sha256, metadata, sha256Match: match }
+  }
   return { bytes, sha256, metadata, sha256Match: sha256 === manifest.file.sha256 }
 }

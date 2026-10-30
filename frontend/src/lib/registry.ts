@@ -11,7 +11,7 @@ import { loadConfig } from './config'
 import { autoEvmChain } from './evm'
 import { REGISTRY_ABI } from './registry-abi'
 import type { EvmSigner } from './wallet/types'
-import { t } from '../i18n'
+import { t } from '../i18n/core.ts'
 
 export interface RegistryEntry {
   manifestCid: string
@@ -56,7 +56,7 @@ export function walletClientFor(signer: EvmSigner): WalletClient {
 // Wait for a write tx to land in a block (registry writes do not participate in
 // confirmation-depth logic — the EVM domain produces blocks fast, so a receipt
 // is already a strong signal)
-async function waitWritten(hash: `0x${string}`): Promise<void> {
+export async function waitWritten(hash: `0x${string}`): Promise<void> {
   const receipt = await registryPublicClient().waitForTransactionReceipt({ hash, confirmations: 2 })
   if (receipt.status !== 'success') throw new Error(t('errors.registryTxFailed', [receipt.status, hash]))
 }
@@ -64,7 +64,7 @@ async function waitWritten(hash: `0x${string}`): Promise<void> {
 // writeContract's account must be given explicitly (nullable in the client's
 // generic type): the injected path passes the address (signing inside the
 // extension), the local path passes the Account object (local signing)
-const accountOf = (signer: EvmSigner) =>
+export const accountOf = (signer: EvmSigner) =>
   signer.kind === 'injected' ? (signer.address as `0x${string}`) : signer.account!
 
 export async function fetchEntries(owner: string): Promise<RegistryEntry[]> {

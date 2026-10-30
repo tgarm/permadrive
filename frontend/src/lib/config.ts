@@ -13,6 +13,13 @@ export interface AppConfig {
   evmRpcUrl: string
   /** FileRegistry v2 (with register fee) — default read/write address; the frozen v1 stays out of the config (never publicly launched, its history lives on-chain and in deployments.json) */
   registryAddress: string
+  /** Mailbox (on-chain private messages) */
+  mailboxAddress: string
+  /** Mailbox deployment block (the getLogs scan start; baked in at deploy time) */
+  mailboxDeployBlock: number
+  /** Paywall (paid-download escrow) — the main instance; the test instance is selftest-only */
+  paywallAddress: string
+  paywallDeployBlock: number
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -22,6 +29,12 @@ export const DEFAULT_CONFIG: AppConfig = {
   evmRpcUrl: 'https://auto-evm.mainnet.autonomys.xyz/ws',
   // FileRegistry v2 mainnet deployment (contracts/deployments.json auto-evm-mainnet-v2, 2026-10-26)
   registryAddress: '0x79a22e5dc2e0613d8e9b491a1a51038b9197b185',
+  // Mailbox mainnet deployment (contracts/deployments.json auto-evm-mainnet-mailbox, 2026-10-29)
+  mailboxAddress: '0x3446abe95edc17e4056a28d7c5fb10d579395200',
+  mailboxDeployBlock: 5311071,
+  // Paywall main instance (contracts/deployments.json auto-evm-mainnet-paywall, 2026-10-30; 3d/3d)
+  paywallAddress: '0xb51be7a5cc1a03fd51892d9db1fc942aa164405a',
+  paywallDeployBlock: 5314515,
 }
 
 // A few dev/acceptance devices stored the v1 address as registryAddress back
@@ -44,6 +57,10 @@ export function loadConfig(): AppConfig {
         parsed.registryAddress && parsed.registryAddress !== LEGACY_V1_DEFAULT
           ? parsed.registryAddress
           : DEFAULT_CONFIG.registryAddress,
+      mailboxAddress: parsed.mailboxAddress || DEFAULT_CONFIG.mailboxAddress,
+      mailboxDeployBlock: Number(parsed.mailboxDeployBlock) > 0 ? Number(parsed.mailboxDeployBlock) : DEFAULT_CONFIG.mailboxDeployBlock,
+      paywallAddress: parsed.paywallAddress || DEFAULT_CONFIG.paywallAddress,
+      paywallDeployBlock: Number(parsed.paywallDeployBlock) > 0 ? Number(parsed.paywallDeployBlock) : DEFAULT_CONFIG.paywallDeployBlock,
     }
   } catch {
     return { ...DEFAULT_CONFIG }

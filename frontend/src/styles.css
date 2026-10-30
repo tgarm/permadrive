@@ -606,3 +606,204 @@ textarea:focus {
 .hint-body a {
   color: var(--accent);
 }
+
+/* Encrypted upload toggle + decryption passphrase dialog */
+.encrypt-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.encrypt-toggle-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 65%, transparent);
+}
+
+.modal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(420px, 92vw);
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.modal-card h3 {
+  margin: 0;
+}
+
+.modal-card input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* On-chain private messages (two-pane conversation view) */
+.messages-layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 14px;
+  min-height: 320px;
+}
+
+@media (max-width: 720px) {
+  .messages-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.msg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.msg-peer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.msg-peer:hover,
+.msg-peer.active {
+  border-color: var(--accent);
+}
+
+.msg-peer .badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.msg-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.msg-thread-head {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.msg-bubbles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.msg-in,
+.msg-out {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg-out {
+  align-self: flex-end;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+}
+
+.msg-body {
+  margin-bottom: 2px;
+}
+
+.msg-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.msg-compose textarea,
+.msg-compose input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.badge {
+  display: inline-block;
+}
+
+/* Paid downloads, two columns */
+.paywall-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+@media (max-width: 860px) {
+  .paywall-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pw-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pw-col h3 {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.pw-col select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  max-width: 260px;
+}
