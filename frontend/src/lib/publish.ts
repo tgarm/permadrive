@@ -1,23 +1,41 @@
-// Publish pipeline (browser version of publish.mjs, in three phases so the UI
-// can halt at the fee confirmation):
-//   prepareUpload(file)     pack + sha256 (purely local, no network)
-//   estimateFee(api, bytes) byteFee × total bytes — payment_queryInfo panics
-//                           on large remarks (mainnet runtime bug), so use a
-//                           first-order approximation
-//   publishPrepared(...)    wallet signs → utility.batch single tx preferred;
-//                           if the node rejects it, fall back to signing each
-//                           tx individually (measured on mainnet: 1 MB ≈ 17 nodes in a
-//                           single tx was untested at the time; batched per-tx
-//                           submission is a normal path, not an error) →
-//                           confirmationDepth confirmation → manifest v1
+// Publish flow (browser port of publish.mjs; three phases so the UI can pause
+// at the fee confirmation):
+//   prepareUpload(file)     pack + sha256 (pure local, no network)
+//   estimateFee(api, bytes) byteFee x total bytes — payment_queryInfo panics on
+//                           large remarks (mainnet runtime bug); use the first-
+//                           order approximation
+//   publishPrepared(...)    wallet signs → utility.batch first; degrade to
+//                           per-tx only on a definitive (capacity/format)
+//                           rejection proving non-acceptance →
+//                           confirmationDepth confirm → manifest v2
+//
+// Error model (design review R02): a failed submission does not mean "not
+// submitted". The publish task (tx hashes + start height + manifest rebuild
+// metadata) is persisted right after signing; every failure afterwards is
+// "result pending verification" — the only remedy is rescanning by hash
+// (verifyPublishTask), never auto-resending (a same-nonce resend trips the
+// (signer, nonce) dedup ban). Structured errors live in chain.ts (TxRejected /
+// TxResultUnknown / TxNotFound / InclusionLost).
 
 import type { ApiPromise } from '@polkadot/api'
 import type { SubmittableExtrinsic } from '@polkadot/api/types'
-import { submitAndWaitConfirmed } from './chain'
-import { makeRemarkPayload, packFile, type PackedNode } from './dag'
-import type { Manifest, ManifestEncryption } from './manifest'
-import { sha256Hex } from './bytes'
-import type { SubstrateSigner } from './wallet/types'
+import {
+  TxRejectedError,
+  findInclusionByHash,
+  submitAndWaitConfirmed,
+  waitInclusionConfirmed,
+  type Inclusion,
+} from './chain.ts'
+import { makeRemarkPayload, packFile, type PackedNode } from './dag.ts'
+import type { Manifest, ManifestEncryption } from './manifest.ts'
+import { sha256Hex } from './bytes.ts'
+import {
+  deletePublishTask,
+  listPublishTasks,
+  putPublishTask,
+  type PublishTaskRecord,
+} from './store.ts'
+import type { SubstrateSigner } from './wallet/types.ts'
 import { t } from '../i18n/core.ts'
 
 export interface PreparedUpload {
@@ -25,6 +43,17 @@ export interface PreparedUpload {
   rootCid: string
   nodes: PackedNode[]
   totalBytes: number
+}
+
+/**
+ * Manifest assembly overrides (encrypted uploads): the DAG packs the ciphertext
+ * and prepared.file holds ciphertext metadata — manifest.file must be overridden
+ * with plaintext metadata (name/size are public); encryption carries the v2
+ * encryption block; the plaintext sha256 (file.sha256) verifies after decryption.
+ */
+export interface PublishOverrides {
+  file?: Partial<Manifest['file']>
+  encryption?: ManifestEncryption | null
 }
 
 export async function prepareUpload(file: File): Promise<PreparedUpload> {
@@ -37,8 +66,7 @@ export async function prepareUpload(file: File): Promise<PreparedUpload> {
   }
 }
 
-// First-order fee approximation (measured on a 200 KB PoC: error negligible —
-// the base fee contribution is negligible)
+// First-order fee approximation (PoC measured the error negligible at 200KB: base fee is negligible)
 export async function estimateFee(api: ApiPromise, totalBytes: number): Promise<{ shannons: bigint; ai3: number }> {
   const fee = await api.query.transactionFees.transactionByteFee()
   const json = fee.toJSON() as { current?: string | number }
@@ -47,19 +75,14 @@ export async function estimateFee(api: ApiPromise, totalBytes: number): Promise<
   return { shannons, ai3: Number(shannons) / 1e18 }
 }
 
-export type PublishStage = 'signing' | 'submitting' | 'scanning' | 'confirming'
+export type PublishStage = 'signing' | 'submitting' | 'submitted' | 'scanning' | 'confirming'
 
-/**
- * Manifest assembly overrides (encrypted uploads): the DAG is packed from the
- * CIPHERTEXT, so prepared.file holds ciphertext metadata — manifest.file must
- * be overridden with the plaintext metadata (filenames/sizes are public), and
- * encryption carries the v2 block. file.sha256 is the plaintext sha256,
- * checked after decryption.
- */
-export interface PublishOverrides {
-  file?: Partial<Manifest['file']>
-  encryption?: ManifestEncryption | null
-}
+// Degrade to per-tx only on the node's definitive capacity/format rejection of
+// the batch, with no "may have been received" semantics. banned / not found /
+// timeout / lost response never qualify — the tx may already be in the pool or
+// a block, and resending the same nonce trips the dedup ban.
+const BATCH_CAPACITY_RE = /too large|exceeds|exhaust|block capacity|requires? more weight|weight.{0,40}exceed|invalid transaction (version|format)|malformed/i
+const MAYBE_RECEIVED_RE = /banned|already imported|usurped|future|not found|timeout/i
 
 export async function publishPrepared(
   api: ApiPromise,
@@ -67,42 +90,76 @@ export async function publishPrepared(
   signer: SubstrateSigner,
   onStage: (stage: PublishStage, detail?: string) => void,
   overrides: PublishOverrides = {},
+  opts: { scanTimeoutMs?: number; confirmTimeoutMs?: number; depth?: number } = {},
 ): Promise<Manifest> {
   const remarkTxs = (): SubmittableExtrinsic<'promise'>[] =>
     prepared.nodes.map((n) => api.tx.system.remark(makeRemarkPayload(n.bytes)))
 
-  const submitTx = async (tx: SubmittableExtrinsic<'promise'>) => {
+  const taskId = `publish:${prepared.rootCid}`
+  const startHeight = (await api.rpc.chain.getHeader()).number.toNumber()
+  const task = (txHashes: string[], status: PublishTaskRecord['status'], lastError: string | null): PublishTaskRecord => ({
+    id: taskId,
+    kind: 'publish',
+    rootCid: prepared.rootCid,
+    file: prepared.file,
+    overridesFile: overrides.file ? { ...overrides.file } : null,
+    encryption: overrides.encryption ?? null,
+    nodes: prepared.nodes.map((n) => ({ cid: n.cid, blake3: n.blake3, bytes: n.bytes.length })),
+    totalBytes: prepared.totalBytes,
+    startHeight,
+    txHashes,
+    status,
+    lastError,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
+
+  const submitTx = async (tx: SubmittableExtrinsic<'promise'>, currentHashes: string[]): Promise<Inclusion> => {
     onStage('signing')
-    // Autonomys nonce semantics: accountNextIndex returning a huge value
-    // (≈ chain height) is normal — sign with it directly (same approach as the
-    // official backend)
+    // Autonomys nonce semantics: accountNextIndex returning a huge value (about
+    // the chain height) is normal — sign with it directly (same as the official backend)
     const nonce = (await api.rpc.system.accountNextIndex(signer.address)).toNumber()
-    // The local path signs directly with a KeyringPair (payload built by
-    // api.registry); the extension path goes through Signer.signPayload with
-    // signing inside the wallet
+    // local signers sign with the KeyringPair (payload built by api.registry);
+    // extension signers go through Signer.signPayload inside the wallet
     if (signer.pair) await tx.signAsync(signer.pair, { nonce })
     else await tx.signAsync(signer.address, { signer: signer.signer!, nonce })
-    return submitAndWaitConfirmed(api, tx, { onStage: (s) => onStage(s as PublishStage) })
+    // persist the task after signing, before submitting — from this moment a
+    // "result unknown" is verifiable and recoverable
+    await putPublishTask(task([...currentHashes, tx.hash.toHex()], 'pending-verify', null))
+    return submitAndWaitConfirmed(api, tx, { ...opts, onStage: (s) => onStage(s as PublishStage) })
   }
 
-  // batch first (one signature carries all nodes); fall back to per-tx only
-  // when rejected with something other than banned/not-found.
-  // Submission failure ≠ publish failure: banned/not-found errors mean the tx
-  // may already be in the pool, and blindly resubmitting the same nonce hits
-  // the (signer, nonce) dedup — rethrow and let the user fall back to retrieval.
-  const inclusions: { txHash: string; blockHash: string; height: number }[] = []
+  const inclusions: Inclusion[] = []
   try {
-    inclusions.push(await submitTx(api.tx.utility.batch(remarkTxs())))
+    const batch = api.tx.utility.batch(remarkTxs())
+    inclusions.push(await submitTx(batch, []))
   } catch (e) {
-    const message = (e as Error).message
-    if (/temporarily banned|not found on best chain/.test(message)) throw e
+    const message = (e as Error).message ?? ''
+    const rejected = e instanceof TxRejectedError
+    const capacityReject = rejected && BATCH_CAPACITY_RE.test(message) && !MAYBE_RECEIVED_RE.test(message)
+    if (!capacityReject) {
+      // pending verification (submitted but timed out / lost response / confirm
+      // failed) or another definitive rejection (banned etc.): the task is
+      // persisted — rescan by hash; never degrade and resend
+      throw e
+    }
+    // definitive capacity/format rejection (a synchronous node rejection proves
+    // non-acceptance) → drop the batch hash, degrade to per-tx
+    await putPublishTask(task([], 'pending-verify', `batch rejected: ${message}`))
     onStage('signing', t('stage.batchFallback'))
-    for (const tx of remarkTxs()) inclusions.push(await submitTx(tx))
+    for (const tx of remarkTxs()) {
+      const inc = await submitTx(tx, inclusions.map((i) => i.txHash))
+      inclusions.push(inc)
+    }
   }
+
+  // everything confirmed: remove the recovery task (the manifest itself is the
+  // persistent credential)
+  await deletePublishTask(taskId)
 
   const chainName = (await api.rpc.system.chain()).toString()
   return {
-    version: 2, // every new upload is v2 (encryption null = plain upload, a superset of v1)
+    version: 2, // v2 起新发布一律 v2（encryption null = 明文上传，是 v1 的超集）
     network: /mainnet/i.test(chainName) ? 'mainnet' : chainName,
     rootCid: prepared.rootCid,
     file: { ...prepared.file, ...overrides.file },
@@ -113,4 +170,44 @@ export async function publishPrepared(
     txs: inclusions,
     submittedAt: new Date().toISOString(),
   }
+}
+
+// ---- "pending verification" recovery (design review R02) ----
+
+/** All publish tasks pending verification (refresh on page load / after a failed publish) */
+export const listPendingPublish = (): Promise<PublishTaskRecord[]> =>
+  listPublishTasks().then((all) => all.filter((x) => x.status === 'pending-verify'))
+
+/** Dismiss a pending task (the content may be on-chain — re-uploading after dismissal pays the byte fee again) */
+export const dismissPendingPublish = (task: PublishTaskRecord): Promise<void> => deletePublishTask(task.id)
+
+/** Verify by rescanning hashes: once every tx is found and confirmed, rebuild the manifest from the task metadata and persist it (no republish, no byte fee); otherwise return null (still undetermined, try later) */
+export async function verifyPublishTask(
+  api: ApiPromise,
+  record: PublishTaskRecord,
+  opts: { depth?: number; timeoutMs?: number; pollMs?: number } = {},
+): Promise<Manifest | null> {
+  const inclusions: Inclusion[] = []
+  for (const txHash of record.txHashes) {
+    const inclusion = await findInclusionByHash(api, txHash, record.startHeight)
+    if (!inclusion) return null
+    const confirmed = await waitInclusionConfirmed(api, inclusion, { depth: opts.depth ?? 12, timeoutMs: opts.timeoutMs ?? 8 * 60_000, pollMs: opts.pollMs })
+    if (!confirmed) return null
+    inclusions.push(inclusion)
+  }
+  const chainName = (await api.rpc.system.chain()).toString()
+  const manifest: Manifest = {
+    version: 2,
+    network: /mainnet/i.test(chainName) ? 'mainnet' : chainName,
+    rootCid: record.rootCid,
+    file: { ...record.file, ...(record.overridesFile as Partial<Manifest['file']> | null) } as Manifest['file'],
+    encryption: (record.encryption as ManifestEncryption | null) ?? null,
+    compression: null,
+    uploader: { address: '' }, // 重建场景：发布者地址未入任务（不影响取回）
+    nodes: record.nodes,
+    txs: inclusions,
+    submittedAt: new Date(record.createdAt).toISOString(),
+  }
+  await deletePublishTask(record.id)
+  return manifest
 }

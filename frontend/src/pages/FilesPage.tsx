@@ -41,9 +41,11 @@ import {
   putManifest,
   putRegistryRecord,
   putTask,
+  type PublishTaskRecord,
   type RegistryRecord,
   type TaskRecord,
 } from '../lib/store'
+import { dismissPendingPublish, listPendingPublish, verifyPublishTask } from '../lib/publish'
 import { saveBlob } from '../lib/download'
 import { PaywallSection } from './PaywallSection'
 import { nodeCount, t, useI18n } from '../i18n'
@@ -87,16 +89,50 @@ export function FilesPage() {
   // passphrase fallback dialog for download decryption (suspends the decrypt promise)
   const [passPrompt, setPassPrompt] = useState<{ resolve: (v: string | null) => void } | null>(null)
   const [passPromptValue, setPassPromptValue] = useState('')
+  // publish results pending verification (R02: rescan by hash on unknown
+  // results — never auto-resend)
+  const [pendingPublish, setPendingPublish] = useState<PublishTaskRecord[]>([])
+  const [verifyingId, setVerifyingId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
   const watching = useRef(new Set<string>())
 
+  const refreshPendingPublish = useCallback(async () => {
+    setPendingPublish(await listPendingPublish())
+  }, [])
+
   const refresh = useCallback(async () => {
     const [ms, ts, rs] = await Promise.all([listManifests(), listTasks(), listRegistryRecords()])
     setManifests(ms.sort((a, b) => b.submittedAt.localeCompare(a.submittedAt)))
-    setTasks(ts)
+    setTasks(ts.filter((x) => x.kind === 'archive-watch')) // publish tasks are tracked by pendingPublish
     setRegistryRecords(rs)
   }, [])
+
+  const verifyPending = async (record: PublishTaskRecord) => {
+    setVerifyingId(record.id)
+    try {
+      const api = await connect()
+      const manifest = await verifyPublishTask(api, record)
+      if (manifest) {
+        await putManifest(manifest)
+        setNotice(t('publishPending.recovered', [manifest.file.name]))
+      } else {
+        setNotice(t('publishPending.notFound'))
+      }
+    } catch (e) {
+      setNotice(`✗ ${(e as Error).message}`)
+    } finally {
+      setVerifyingId(null)
+      await refreshPendingPublish()
+      await refresh()
+    }
+  }
+
+  const dismissPending = async (record: PublishTaskRecord) => {
+    if (!window.confirm(t('publishPending.dismissConfirm'))) return
+    await dismissPendingPublish(record)
+    await refreshPendingPublish()
+  }
 
   const watchArchive = useCallback(
     async (manifest: Manifest) => {
@@ -149,13 +185,14 @@ export function FilesPage() {
     void refresh().then(async () => {
       // restart unfinished archive watches (they survive reload/close)
       const [ts, ms] = [await listTasks(), await listManifests()]
-      for (const tk of ts.filter((x) => !x.done)) {
+      for (const tk of ts.filter((x) => x.kind === 'archive-watch' && !x.done)) {
         const manifest = ms.find((m) => m.rootCid === tk.id) ?? (await getManifest(tk.id))
         if (manifest) void watchArchive(manifest)
         else await deleteTask(tk.id)
       }
+      await refreshPendingPublish()
     })
-  }, [refresh, watchArchive])
+  }, [refresh, watchArchive, refreshPendingPublish])
 
   const pickFile = async (file: File) => {
     setNotice(null)
@@ -238,6 +275,7 @@ export function FilesPage() {
       await refresh()
     } catch (e) {
       setUpload((cur) => (cur ? { ...cur, stage: 'error', error: (e as Error).message } : cur))
+      await refreshPendingPublish() // a publish task may have been persisted (pending verification)
     }
   }
 
@@ -325,6 +363,7 @@ export function FilesPage() {
         const text = {
           signing: t('stage.manifestSigning'),
           submitting: t('stage.manifestSubmitting'),
+          submitted: t('stage.submitted'),
           scanning: t('stage.manifestScanning'),
           confirming: t('stage.manifestConfirming'),
           'packing-manifest': t('stage.packingManifest'),
@@ -573,6 +612,24 @@ export function FilesPage() {
             }}
           />
         </div>
+        {pendingPublish.length > 0 && (
+          <div className="notice">
+            <div>{t('publishPending.title', [String(pendingPublish.length)])}</div>
+            {pendingPublish.map((p) => (
+              <div key={p.id} className="row" style={{ alignItems: 'center', gap: 8 }}>
+                <span className="muted small-text">
+                  {t('publishPending.detail', [p.file.name, String(p.txHashes.length), String(p.startHeight)])}
+                </span>
+                <button className="btn small" disabled={verifyingId === p.id} onClick={() => void verifyPending(p)}>
+                  {verifyingId === p.id ? t('publishPending.verifying') : t('publishPending.verify')}
+                </button>
+                <button className="btn ghost small" disabled={verifyingId === p.id} onClick={() => void dismissPending(p)}>
+                  {t('publishPending.dismiss')}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {notice && <div className="notice">{notice}</div>}
         {recoverState && <div className="notice">{recoverState}</div>}
         {manifests.length === 0 ? (
@@ -710,6 +767,7 @@ function stageText(stage: UploadSession['stage']): string {
     'awaiting-confirm': 'stage.awaitingConfirm',
     signing: 'stage.signing',
     submitting: 'stage.submitting',
+    submitted: 'stage.submitted',
     scanning: 'stage.scanning',
     confirming: 'stage.confirming',
   }

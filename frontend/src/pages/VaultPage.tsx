@@ -309,6 +309,7 @@ export function VaultPage() {
         const text = {
           signing: t('stage.signing'),
           submitting: t('stage.submitting'),
+          submitted: t('stage.submitted'),
           scanning: t('stage.scanning'),
           confirming: t('stage.confirming'),
         }[stage] ?? stage

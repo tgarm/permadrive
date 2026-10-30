@@ -56,7 +56,9 @@
     "manifestConfirming": "Waiting for confirmations (12 blocks)…",
     "manifestPublishing": "Publishing manifest file…",
     "batchFallback": "single tx rejected, falling back to per-tx signing…",
-    "keyWrap": "wrapping file key (may ask for a signature twice)…"
+    "keyWrap": "wrapping file key (may ask for a signature twice)…",
+    "reorgRescan": "Inclusion block reorged away — rescanning the lookback window (attempt {0})",
+    "submitted": "Submitted to node (awaiting confirmation — never auto-resent)"
   },
   "theme": {
     "light": "Light",
@@ -381,7 +383,8 @@
     "boxEnvelopeInvalid": "Invalid box envelope",
     "boxNoEncryptionPublicKey": "Wallet did not return an encryption public key",
     "paywallNotConfigured": "Paywall contract address is not configured",
-    "paywallNotEncrypted": "This manifest is not encrypted — nothing to deliver"
+    "paywallNotEncrypted": "This manifest is not encrypted — nothing to deliver",
+    "publishPendingVerify": "Publish result pending verification: the transaction was submitted but confirmation did not finish ({0}). Recovery data is saved — use “Verify” on the files page later. Do not re-upload the same file."
   },
   "messages": {
     "title": "On-chain Private Messages",
@@ -453,5 +456,15 @@
     "legacyTag": "legacy",
     "refundBtn": "Refund",
     "refundedOk": "Refunded in full."
+  },
+  "publishPending": {
+    "title": "{0} publish result(s) pending verification",
+    "detail": "{0} · {1} tx(s) from block #{2}",
+    "verify": "Verify",
+    "verifying": "Verifying…",
+    "dismiss": "Dismiss",
+    "dismissConfirm": "Dismissing removes the hash-based recovery handle; if the content is actually on-chain, re-uploading will pay the byte fee again. Dismiss anyway?",
+    "notFound": "Transactions still not found on-chain — try again later (they may still be in the pool).",
+    "recovered": "Verified and manifest recovered: {0}"
   }
 }

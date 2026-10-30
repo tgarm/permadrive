@@ -13,5 +13,8 @@
     "@polkadot/api": "^16.0.0",
     "multiformats": "^13.4.2",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.7"
   }
 }

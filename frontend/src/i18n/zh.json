@@ -56,7 +56,9 @@
     "manifestConfirming": "等待确认（12 块）…",
     "manifestPublishing": "manifest 文件上链中…",
     "batchFallback": "单笔超限，分批逐笔签名…",
-    "keyWrap": "生成文件密钥包裹（可能需两次签名）…"
+    "keyWrap": "生成文件密钥包裹（可能需两次签名）…",
+    "reorgRescan": "包含块被重组，回退窗口重扫（第 {0} 次）",
+    "submitted": "已提交节点（待确认 —— 结果不会自动重发）"
   },
   "theme": {
     "light": "亮色",
@@ -381,7 +383,8 @@
     "boxEnvelopeInvalid": "盒信封格式非法",
     "boxNoEncryptionPublicKey": "钱包未返回加密公钥",
     "paywallNotConfigured": "Paywall 合约地址未配置",
-    "paywallNotEncrypted": "该 manifest 未加密——没有密钥可交付"
+    "paywallNotEncrypted": "该 manifest 未加密——没有密钥可交付",
+    "publishPendingVerify": "发布结果待核实：交易已提交但确认未完成（{0}）。已保存恢复凭据，可稍后在文件页「核实」——请勿重复上传同一文件。"
   },
   "messages": {
     "title": "链上私密消息",
@@ -453,5 +456,15 @@
     "legacyTag": "旧合约",
     "refundBtn": "申请退款",
     "refundedOk": "退款已到账（全额）。"
+  },
+  "publishPending": {
+    "title": "有 {0} 个发布结果待核实",
+    "detail": "{0} · {1} 笔交易自块 #{2} 起",
+    "verify": "核实",
+    "verifying": "核实中…",
+    "dismiss": "放弃",
+    "dismissConfirm": "放弃后按 hash 的核实入口将被删除；若内容实际上链，重新上传会重复花费字节费。确定放弃？",
+    "notFound": "仍未在链上找到交易 —— 稍后再试（交易可能还在池中）。",
+    "recovered": "已核实并恢复 manifest：{0}"
   }
 }

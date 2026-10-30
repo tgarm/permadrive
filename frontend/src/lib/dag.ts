@@ -19,7 +19,7 @@ import {
 import { compactAddLength } from '@polkadot/util'
 import { MemoryBlockstore } from 'blockstore-core'
 import type { CID } from 'multiformats/cid'
-import { toHex } from './bytes'
+import { toHex } from './bytes.ts'
 
 export interface PackedNode {
   cid: string
