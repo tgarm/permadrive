@@ -17,9 +17,16 @@ export interface AppConfig {
   mailboxAddress: string
   /** Mailbox deployment block (the getLogs scan start; baked in at deploy time) */
   mailboxDeployBlock: number
-  /** Paywall (paid-download escrow) — the main instance; the test instance is selftest-only */
+  /** Paywall v1 (paid-download escrow) — affected by an overwrite-seller flaw,
+   *  frozen read-only: only refunds/confirm/withdraw for existing orders;
+   *  new listings/purchases go through v2 */
   paywallAddress: string
   paywallDeployBlock: number
+  /** Paywall v2 order model — seller namespace + order snapshots. Once
+   *  deployed and filled in it becomes the active instance; empty (default)
+   *  keeps v1 as the only active instance (current behavior) */
+  paywallV2Address: string
+  paywallV2DeployBlock: number
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -32,9 +39,13 @@ export const DEFAULT_CONFIG: AppConfig = {
   // Mailbox mainnet deployment (contracts/deployments.json auto-evm-mainnet-mailbox, 2026-10-29)
   mailboxAddress: '0x3446abe95edc17e4056a28d7c5fb10d579395200',
   mailboxDeployBlock: 5311071,
-  // Paywall main instance (contracts/deployments.json auto-evm-mainnet-paywall, 2026-10-30; 3d/3d)
+  // Paywall v1 main instance (contracts/deployments.json auto-evm-mainnet-paywall, 2026-10-30;
+  // 3d/3d) — frozen read-only after the seller-overwrite flaw; refund/confirm/withdraw kept
   paywallAddress: '0xb51be7a5cc1a03fd51892d9db1fc942aa164405a',
   paywallDeployBlock: 5314515,
+  // Paywall v2 (order-model redesign) — filled in by the deploy script / Settings after deployment
+  paywallV2Address: '',
+  paywallV2DeployBlock: 0,
 }
 
 // A few dev/acceptance devices stored the v1 address as registryAddress back
@@ -61,6 +72,8 @@ export function loadConfig(): AppConfig {
       mailboxDeployBlock: Number(parsed.mailboxDeployBlock) > 0 ? Number(parsed.mailboxDeployBlock) : DEFAULT_CONFIG.mailboxDeployBlock,
       paywallAddress: parsed.paywallAddress || DEFAULT_CONFIG.paywallAddress,
       paywallDeployBlock: Number(parsed.paywallDeployBlock) > 0 ? Number(parsed.paywallDeployBlock) : DEFAULT_CONFIG.paywallDeployBlock,
+      paywallV2Address: typeof parsed.paywallV2Address === 'string' ? parsed.paywallV2Address : DEFAULT_CONFIG.paywallV2Address,
+      paywallV2DeployBlock: Number(parsed.paywallV2DeployBlock) > 0 ? Number(parsed.paywallV2DeployBlock) : DEFAULT_CONFIG.paywallV2DeployBlock,
     }
   } catch {
     return { ...DEFAULT_CONFIG }

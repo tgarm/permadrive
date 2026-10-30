@@ -322,7 +322,9 @@
     "notConnected": "未连接（首次操作时自动连接）",
     "feeRate": "链上存储费率",
     "feeRateValue": "≈ {0} AI3 / MB（transactionByteFee 实时值）",
-    "testConnection": "测试连接"
+    "testConnection": "测试连接",
+    "paywallLabel": "Paywall v1 合约地址（旧托管 · 已冻结，仅存量订单退款/提现）",
+    "paywallV2Label": "Paywall v2 合约地址（订单模型 · 部署后填入；为空时新购买走 v1）"
   },
   "errors": {
     "registryNotConfigured": "FileRegistry 地址未配置（Settings → 链上目录，或等主网部署后内置）",
@@ -446,6 +448,10 @@
       "delivered": "已交付",
       "released": "已完成",
       "refunded": "已退款"
-    }
+    },
+    "withdrawLegacy": "从旧合约提现 {0} AI3",
+    "legacyTag": "旧合约",
+    "refundBtn": "申请退款",
+    "refundedOk": "退款已到账（全额）。"
   }
 }

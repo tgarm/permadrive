@@ -322,7 +322,9 @@
     "notConnected": "Not connected (connects automatically on first use)",
     "feeRate": "On-chain storage fee rate",
     "feeRateValue": "≈ {0} AI3 / MB (live transactionByteFee value)",
-    "testConnection": "Test connection"
+    "testConnection": "Test connection",
+    "paywallLabel": "Paywall v1 contract address (legacy escrow · frozen, refunds/withdrawals only)",
+    "paywallV2Label": "Paywall v2 contract address (order model · fill in after deployment; v1 stays active while empty)"
   },
   "errors": {
     "registryNotConfigured": "FileRegistry address not configured (Settings → on-chain registry, or built in once the mainnet deployment lands)",
@@ -446,6 +448,10 @@
       "delivered": "delivered",
       "released": "completed",
       "refunded": "refunded"
-    }
+    },
+    "withdrawLegacy": "Withdraw {0} AI3 (legacy)",
+    "legacyTag": "legacy",
+    "refundBtn": "Refund",
+    "refundedOk": "Refunded in full."
   }
 }

@@ -4,5 +4,8 @@
   "type": "module",
   "dependencies": {
     "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "ganache": "^7.9.2"
   }
 }

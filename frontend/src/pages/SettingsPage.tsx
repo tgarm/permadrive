@@ -59,6 +59,14 @@ export function SettingsPage() {
           <span>{t('settings.registryLabel')}</span>
           <input value={form.registryAddress} onChange={(e) => setForm({ ...form, registryAddress: e.target.value })} spellCheck={false} />
         </label>
+        <label className="field">
+          <span>{t('settings.paywallLabel')}</span>
+          <input value={form.paywallAddress} onChange={(e) => setForm({ ...form, paywallAddress: e.target.value })} spellCheck={false} />
+        </label>
+        <label className="field">
+          <span>{t('settings.paywallV2Label')}</span>
+          <input value={form.paywallV2Address} onChange={(e) => setForm({ ...form, paywallV2Address: e.target.value })} spellCheck={false} />
+        </label>
         <div className="row">
           <button className="btn primary" onClick={() => void save()}>
             {t('settings.save')}

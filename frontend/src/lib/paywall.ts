@@ -7,10 +7,21 @@
 // buyer confirms receipt (or refunds within the grace period). No keeper:
 // every state transition is triggered by an interested party. Digital-goods
 // mode (buying grants the file, no DRM) is stated in the UI.
+//
+// Dual-instance strategy: the v1 Paywall carries a seller-overwrite flaw and is
+// frozen read-only — once paywallV2Address is configured it becomes the active
+// instance (all new actions go through v2) while v1 keeps refund/confirm/
+// withdraw entries for existing orders only; while v2 is unconfigured, v1
+// remains the sole active instance (current behavior). The v2 order model:
+// Order snapshots seller/price/feeBps (delist/reprice never affect escrowed
+// orders), independent increasing orderIds (repurchase history preserved),
+// and purchase names the seller plus a maxPrice bound.
 
 import { keccak256, parseAbiItem, toHex } from 'viem'
 import { loadConfig } from './config'
 import { PAYWALL_ABI } from './paywall-abi'
+import { PAYWALL_V2_ABI } from './paywall-abi-v2'
+import { getMeta, putMeta } from './store.ts'
 import { accountOf, fetchEntries, registryPublicClient, walletClientFor, type RegistryEntry } from './registry'
 import { autoEvmChain } from './evm'
 import { fromHex } from './bytes.ts'
@@ -21,13 +32,25 @@ import type { Manifest } from './manifest'
 import type { EvmSigner } from './wallet/types'
 import { t } from '../i18n/core.ts'
 
+const addrOk = (a: string) => /^0x[0-9a-fA-F]{40}$/.test(a) && !/^0x0{40}$/.test(a)
+
+/** v1 (legacy) instance: carries the overwrite-seller flaw, frozen read-only — refund/confirm/withdraw still work */
 export const paywallAddress = (): `0x${string}` => {
   const addr = loadConfig().paywallAddress
-  if (!/^0x[0-9a-fA-F]{40}$/.test(addr) || /^0x0{40}$/.test(addr)) throw new Error(t('errors.paywallNotConfigured'))
+  if (!addrOk(addr)) throw new Error(t('errors.paywallNotConfigured'))
   return addr as `0x${string}`
 }
 
-/** key = keccak256(manifestCid) (same digest as the registry's manifestCidKey) */
+/** v2 instance address; null while unconfigured (before deployment / not set in Settings) */
+export const paywallV2Address = (): `0x${string}` | null => {
+  const addr = loadConfig().paywallV2Address
+  return addrOk(addr) ? (addr as `0x${string}`) : null
+}
+
+/** whether v2 is the active instance (new listings/purchases/deliveries all go through v2) */
+export const paywallV2Active = (): boolean => paywallV2Address() !== null
+
+/** key = keccak256(manifestCid) (registry manifestCidKey, same derivation) */
 export const listingKey = (manifestCid: string): `0x${string}` => keccak256(toHex(manifestCid))
 
 export interface Listing {
@@ -42,7 +65,7 @@ export async function getListing(manifestCid: string): Promise<Listing | null> {
     functionName: 'listings',
     args: [listingKey(manifestCid)],
   })
-  // a public mapping getter returns the struct as an unnamed tuple (solc emits no component names)
+  // public mapping getter returns an unnamed tuple (solc does not name the components)
   const [seller, price] = raw as unknown as [string, bigint]
   return seller === '0x0000000000000000000000000000000000000000' ? null : { seller, price }
 }
@@ -68,7 +91,7 @@ export async function getDeal(manifestCid: string, buyer: string): Promise<DealV
 
 export const DEAL_STATE = ['none', 'escrowed', 'delivered', 'released', 'refunded'] as const
 
-/** Each write passes literal functionName/args (viem writeContract derives types from the ABI) */
+/** write ops use literal functionName/args (viem writeContract generics derive from the ABI) */
 async function paywallWrite(op: Promise<`0x${string}`>): Promise<`0x${string}`> {
   const hash = await op
   const receipt = await registryPublicClient().waitForTransactionReceipt({ hash, confirmations: 2 })
@@ -113,6 +136,15 @@ export const confirmReceipt = (signer: EvmSigner, manifestCid: string) =>
 export const refundDeal = (signer: EvmSigner, manifestCid: string) =>
   paywallWrite(writeOps(signer).refund(listingKey(manifestCid)))
 
+/** legacy key-based direct ops: after the seller delists, manifestCid cannot be
+ * recovered from the key, while refund/confirm on the v1 contract only need
+ * key+buyer — keep the entries working */
+export const confirmReceiptByKey = (signer: EvmSigner, key: `0x${string}`) =>
+  paywallWrite(writeOps(signer).confirmReceipt(key))
+
+export const refundByKey = (signer: EvmSigner, key: `0x${string}`) =>
+  paywallWrite(writeOps(signer).refund(key))
+
 export const releaseDeal = (signer: EvmSigner, manifestCid: string, buyer: string) =>
   paywallWrite(writeOps(signer).release(listingKey(manifestCid), buyer as `0x${string}`))
 
@@ -127,7 +159,7 @@ export async function getCredits(address: string): Promise<bigint> {
 
 export const withdrawCredits = (signer: EvmSigner) => paywallWrite(writeOps(signer).withdraw())
 
-// ---- Purchase event scanning (shared by the buyer's purchases and the seller's pending authorisations) ----
+// ---- purchase event scan (shared by buyer "my purchases" and seller "pending authorizations") ----
 
 const PURCHASED = parseAbiItem('event Purchased(bytes32 indexed key, address indexed buyer, uint96 price)')
 
@@ -139,7 +171,7 @@ export interface PurchaseLog {
   blockNumber: number
 }
 
-// RPC hard limit: eth_getLogs block range ≤ 10000 blocks (verified)
+// RPC hard limit: eth_getLogs range ≤ 10000 blocks (observed error)
 async function fetchPurchasedLogs(fromBlock: number): Promise<PurchaseLog[]> {
   const latest = Number(await registryPublicClient().getBlockNumber())
   const out: PurchaseLog[] = []
@@ -159,56 +191,80 @@ async function fetchPurchasedLogs(fromBlock: number): Promise<PurchaseLog[]> {
   return out
 }
 
-export interface PurchaseView {
-  log: PurchaseLog
-  deal: DealView
-  seller: string
-  /** The reverse-looked-up registry entry (manifestCid + height restore the manifest; null if the seller never registered it) */
-  entry: RegistryEntry | null
+// seller → registry entries cache (to map a listing key back to a directory entry;
+// entries carry height for manifest recovery)
+// TTL'd (directories can grow) and network failures are never cached as empty
+// successes — the next call retries
+const ENTRY_TTL_MS = 60_000
+const entriesCache = new Map<string, { at: number; entries: Awaited<ReturnType<typeof fetchEntries>> }>()
+
+export function invalidateEntriesCache(seller?: string): void {
+  if (seller) entriesCache.delete(seller.toLowerCase())
+  else entriesCache.clear()
 }
 
-// seller → registry entries cache (key → entry reverse lookup; the entry's height restores the manifest)
-const entriesCache = new Map<string, Awaited<ReturnType<typeof fetchEntries>>>()
-
 async function entryByKey(seller: string, key: string): Promise<RegistryEntry | null> {
-  let entries = entriesCache.get(seller.toLowerCase())
-  if (!entries) {
-    entries = await fetchEntries(seller).catch(() => [])
-    entriesCache.set(seller.toLowerCase(), entries)
+  const cacheKey = seller.toLowerCase()
+  const hit = entriesCache.get(cacheKey)
+  let entries: Awaited<ReturnType<typeof fetchEntries>>
+  if (hit && Date.now() - hit.at < ENTRY_TTL_MS) {
+    entries = hit.entries
+  } else {
+    try {
+      entries = await fetchEntries(seller)
+    } catch {
+      return null // don't cache failures — retry on the next call
+    }
+    entriesCache.set(cacheKey, { at: Date.now(), entries })
   }
   for (const e of entries) if (listingKey(e.manifestCid) === key) return e
   return null
 }
 
-/** Seller's pending authorisations: Purchased events ∩ own listing keys whose on-chain Deal is still Escrowed */
-export async function fetchPendingGrants(seller: string): Promise<PurchaseView[]> {
+/** normalized UI row shared by legacy and v2 orders (the component never derives
+ * seller/state from the current listing) */
+export interface OrderRow {
+  contract: 'v2' | 'legacy'
+  orderId: bigint | null // v2; null for legacy (the v1 contract has no order ids)
+  key: string
+  price: bigint
+  state: number // 0 None / 1 Escrowed / 2 Delivered / 3 Released / 4 Refunded (same order in both contracts)
+  seller: string // '' when it cannot be recovered (legacy delisted; refund/confirm still work)
+  buyer: string
+  entry: RegistryEntry | null
+}
+
+/** seller pending authorizations (legacy): Purchased ∩ own directory keys, deal still Escrowed */
+export async function fetchPendingGrants(seller: string): Promise<OrderRow[]> {
   const myKeys = new Set((await fetchEntries(seller)).map((e) => listingKey(e.manifestCid)))
   if (myKeys.size === 0) return []
   const logs = await fetchPurchasedLogs(loadConfig().paywallDeployBlock)
-  const pending: PurchaseView[] = []
+  const pending: OrderRow[] = []
   for (const log of logs) {
     if (!myKeys.has(log.key as `0x${string}`)) continue
     const deal = await dealOfKey(log.key, log.buyer)
     if (deal && deal.state === 1) {
       const entry = await entryByKey(seller, log.key)
-      pending.push({ log, deal, seller, entry })
+      pending.push({ contract: 'legacy', orderId: null, key: log.key, price: log.price, state: deal.state, seller, buyer: log.buyer, entry })
     }
   }
   return pending
 }
 
-/** Buyer's purchase records: Purchased (buyer=me) → listing reverse-lookup of the seller → current Deal state */
-export async function fetchMyPurchases(me: string): Promise<PurchaseView[]> {
+/** buyer purchase records (legacy): Purchased (buyer=me) → current Deal state.
+ * A missing listing (seller delisted) no longer drops the order — refund/confirm
+ * stay usable, only the manifest lookup (entry) is unavailable. */
+export async function fetchMyPurchases(me: string): Promise<OrderRow[]> {
   const logs = await fetchPurchasedLogs(loadConfig().paywallDeployBlock)
   const mine = logs.filter((l) => l.buyer === me.toLowerCase())
-  const out: PurchaseView[] = []
+  const out: OrderRow[] = []
   for (const log of mine) {
-    const listing = await listingOfKey(log.key)
-    if (!listing) continue
     const deal = await dealOfKey(log.key, me)
     if (!deal) continue
-    const entry = await entryByKey(listing.seller, log.key)
-    out.push({ log, deal, seller: listing.seller, entry })
+    const listing = await listingOfKey(log.key)
+    const seller = listing?.seller ?? ''
+    const entry = listing ? await entryByKey(listing.seller, log.key) : null
+    out.push({ contract: 'legacy', orderId: null, key: log.key, price: deal.price, state: deal.state, seller, buyer: me.toLowerCase(), entry })
   }
   return out
 }
@@ -225,14 +281,191 @@ async function dealOfKey(key: string, buyer: string): Promise<DealView | null> {
   return d.state === 0 ? null : d
 }
 
-// ---- Key delivery (rides the mailbox message channel) ----
+// ---- v2 order model: seller namespace + order snapshots + independent orderIds ----
+
+export interface OrderViewV2 {
+  seller: string
+  buyer: string
+  price: bigint
+  feeBps: bigint
+  state: number // 0 None / 1 Escrowed / 2 Delivered / 3 Released / 4 Refunded (same order as v1)
+  purchasedAt: bigint
+  deliveredAt: bigint
+}
+
+const writeOpsV2 = (signer: EvmSigner) => {
+  const wallet = walletClientFor(signer)
+  const account = accountOf(signer)
+  const base = { address: paywallV2Address()!, abi: PAYWALL_V2_ABI, chain: autoEvmChain, account } as const
+  return {
+    setPrice: (key: `0x${string}`, price: bigint) =>
+      wallet.writeContract({ ...base, functionName: 'setPrice', args: [key, price] }),
+    // purchase must name the seller; maxPrice = the price the user saw (a changed price → PriceTooHigh)
+    purchase: (key: `0x${string}`, seller: `0x${string}`, maxPrice: bigint) =>
+      wallet.writeContract({ ...base, functionName: 'purchase', args: [key, seller, maxPrice], value: maxPrice }),
+    markDelivered: (orderId: bigint) => wallet.writeContract({ ...base, functionName: 'markDelivered', args: [orderId] }),
+    confirmReceipt: (orderId: bigint) => wallet.writeContract({ ...base, functionName: 'confirmReceipt', args: [orderId] }),
+    refund: (orderId: bigint) => wallet.writeContract({ ...base, functionName: 'refund', args: [orderId] }),
+    release: (orderId: bigint) => wallet.writeContract({ ...base, functionName: 'release', args: [orderId] }),
+    withdraw: () => wallet.writeContract({ ...base, functionName: 'withdraw', args: [] }),
+  }
+}
+
+export const setListingPriceV2 = (signer: EvmSigner, manifestCid: string, priceWei: bigint) =>
+  paywallWrite(writeOpsV2(signer).setPrice(listingKey(manifestCid), priceWei))
+
+export const purchaseV2 = (signer: EvmSigner, manifestCid: string, seller: string, priceWei: bigint) =>
+  paywallWrite(writeOpsV2(signer).purchase(listingKey(manifestCid), seller as `0x${string}`, priceWei))
+
+export const markDeliveredV2 = (signer: EvmSigner, orderId: bigint) =>
+  paywallWrite(writeOpsV2(signer).markDelivered(orderId))
+
+export const confirmReceiptV2 = (signer: EvmSigner, orderId: bigint) =>
+  paywallWrite(writeOpsV2(signer).confirmReceipt(orderId))
+
+export const refundDealV2 = (signer: EvmSigner, orderId: bigint) =>
+  paywallWrite(writeOpsV2(signer).refund(orderId))
+
+export const releaseDealV2 = (signer: EvmSigner, orderId: bigint) =>
+  paywallWrite(writeOpsV2(signer).release(orderId))
+
+export const withdrawCreditsV2 = (signer: EvmSigner) => paywallWrite(writeOpsV2(signer).withdraw())
+
+export async function getCreditsV2(address: string): Promise<bigint> {
+  return registryPublicClient().readContract({
+    address: paywallV2Address()!,
+    abi: PAYWALL_V2_ABI,
+    functionName: 'credits',
+    args: [address as `0x${string}`],
+  })
+}
+
+/** v2 listing price (seller namespace); null = not listed */
+export async function getListingPriceV2(seller: string, manifestCid: string): Promise<bigint | null> {
+  const raw = await registryPublicClient().readContract({
+    address: paywallV2Address()!,
+    abi: PAYWALL_V2_ABI,
+    functionName: 'listingPrice',
+    args: [seller as `0x${string}`, listingKey(manifestCid)],
+  })
+  return (raw as bigint) > 0n ? (raw as bigint) : null
+}
+
+export async function getOrderV2(orderId: bigint): Promise<OrderViewV2 | null> {
+  const raw = await registryPublicClient().readContract({
+    address: paywallV2Address()!,
+    abi: PAYWALL_V2_ABI,
+    functionName: 'orders',
+    args: [orderId],
+  })
+  const [seller, buyer, price, feeBps, state, purchasedAt, deliveredAt] = raw as unknown as [string, string, bigint, bigint, number, bigint, bigint]
+  return state === 0 ? null : { seller, buyer, price, feeBps, state, purchasedAt, deliveredAt }
+}
+
+// ---- v2 purchase event scan (indexed buyer/seller filters + persisted incremental cursor) ----
+
+const PURCHASED_V2 = parseAbiItem(
+  'event Purchased(uint256 indexed orderId, address indexed buyer, address indexed seller, bytes32 key, uint96 price)',
+)
+
+/** incremental scan artifact (no state — state is read back on-chain each time;
+ * the cache only holds static fields) */
+export interface OrderStub {
+  orderId: bigint
+  key: string
+  seller: string
+  buyer: string
+  price: bigint
+  blockNumber: number
+}
+
+interface PersistedOrders {
+  cursor: number // last block scanned (inclusive); 0 = never scanned
+  stubs: OrderStub[]
+}
+
+const ordersCacheKey = (role: 'buyer' | 'seller', contract: string, account: string) =>
+  `paywallOrders:${role}:${contract.toLowerCase()}:${account.toLowerCase()}`
+
+async function scanPurchasedV2(filter: { buyer?: string; seller?: string }, fromBlock: number, toBlock: number): Promise<OrderStub[]> {
+  const out: OrderStub[] = []
+  for (let start = fromBlock; start <= toBlock; start += 10_000) {
+    const logs = await registryPublicClient().getLogs({
+      address: paywallV2Address()!,
+      event: PURCHASED_V2,
+      args: {
+        ...(filter.buyer ? { buyer: filter.buyer as `0x${string}` } : {}),
+        ...(filter.seller ? { seller: filter.seller as `0x${string}` } : {}),
+      },
+      fromBlock: BigInt(start),
+      toBlock: BigInt(Math.min(start + 9_999, toBlock)),
+    })
+    for (const log of logs) {
+      const a = log.args
+      if (a?.orderId == null || !a.buyer || !a.seller || !a.key || a.price == null) continue
+      out.push({ orderId: a.orderId, key: a.key, seller: a.seller.toLowerCase(), buyer: a.buyer.toLowerCase(), price: a.price, blockNumber: Number(log.blockNumber) })
+    }
+  }
+  return out
+}
+
+/** merge incremental scan results (cursor advances only on success; failures
+ * rethrow so the same range is rescanned next time) */
+async function mergedStubs(role: 'buyer' | 'seller', filter: { buyer?: string; seller?: string }, deployBlock: number): Promise<OrderStub[]> {
+  const contract = paywallV2Address()!
+  const account = (filter.buyer ?? filter.seller)!.toLowerCase()
+  const cacheKey = ordersCacheKey(role, contract, account)
+  const persisted = (await getMeta<PersistedOrders>(cacheKey)) ?? { cursor: 0, stubs: [] }
+  const latest = Number(await registryPublicClient().getBlockNumber())
+  const from = persisted.cursor > deployBlock ? persisted.cursor + 1 : deployBlock
+  const fresh = from <= latest ? await scanPurchasedV2(filter, from, latest) : []
+  const byId = new Map<string, OrderStub>()
+  for (const s of persisted.stubs) byId.set(String(s.orderId), s)
+  for (const s of fresh) byId.set(String(s.orderId), s)
+  const stubs = [...byId.values()]
+  await putMeta(cacheKey, { cursor: latest, stubs } satisfies PersistedOrders)
+  return stubs
+}
+
+/** buyer purchase records (v2): newest first; delisting never hides history
+ * (order snapshots, no listing lookback) */
+export async function fetchMyPurchasesV2(me: string): Promise<OrderRow[]> {
+  const stubs = await mergedStubs('buyer', { buyer: me }, loadConfig().paywallV2DeployBlock)
+  stubs.sort((a, b) => (a.orderId < b.orderId ? 1 : -1))
+  const rows: OrderRow[] = []
+  for (const s of stubs) {
+    const o = await getOrderV2(s.orderId)
+    if (!o) continue
+    const entry = await entryByKey(s.seller, s.key)
+    rows.push({ contract: 'v2', orderId: s.orderId, key: s.key, price: o.price, state: o.state, seller: s.seller, buyer: s.buyer, entry })
+  }
+  return rows
+}
+
+/** seller pending authorizations (v2): Purchased on keys listed in the caller's
+ * own namespace, order still Escrowed */
+export async function fetchPendingGrantsV2(seller: string): Promise<OrderRow[]> {
+  const stubs = await mergedStubs('seller', { seller }, loadConfig().paywallV2DeployBlock)
+  stubs.sort((a, b) => (a.orderId < b.orderId ? 1 : -1))
+  const rows: OrderRow[] = []
+  for (const s of stubs) {
+    const o = await getOrderV2(s.orderId)
+    if (!o || o.state !== 1) continue
+    if (o.seller.toLowerCase() !== seller.toLowerCase()) continue // the order's snapshot seller must be the caller
+    const entry = await entryByKey(seller, s.key)
+    rows.push({ contract: 'v2', orderId: s.orderId, key: s.key, price: o.price, state: o.state, seller: s.seller, buyer: s.buyer, entry })
+  }
+  return rows
+}
+
+// ---- key delivery (rides the mailbox message channel) ----
 
 export const PDGRANT_TYPE = 'pdgrant'
 
 export interface PdGrant {
   type: 'pdgrant'
   manifestCid: string
-  /** The inner box envelope (the buyer opens it with their own encryption secret key to get K) */
+  /** inner box envelope (the buyer unwraps K with their encryption private key) */
   wrappedK: string
 }
 
@@ -246,10 +479,10 @@ export const isPdGrant = (plain: string): PdGrant | null => {
 }
 
 /**
- * Seller delivery: unwrap K (signature channel first, passphrase-modal
- * callback as fallback) → box it to the buyer's encryption pubkey → pdgrant
- * message → markDelivered. Delivery is semi-automatic (the seller's app
- * responds when online).
+ * Seller delivery: unwrap K (signature channel first, falling back to the
+ * passphrase prompt callback) → box it to the buyer's announced encryption
+ * pubkey → pdgrant message → markDelivered. Semi-automatic (the seller's app
+ * responds while online).
  */
 export async function deliverKey(
   signer: EvmSigner,
@@ -259,8 +492,7 @@ export async function deliverKey(
   getPassphrase: () => Promise<string | null>,
 ): Promise<{ messageTxHash: string; deliveredTxHash: string }> {
   if (!manifest?.encryption) throw new Error(t('errors.paywallNotEncrypted'))
-  // Self-trade (e2e/acceptance flows): buyer and seller share the same key —
-  // no pdgrant channel is needed, just markDelivered
+  // self-trade (acceptance path): buyer == seller, the pdgrant channel is unnecessary — only markDelivered
   if (buyer.toLowerCase() === signer.address.toLowerCase()) {
     const deliveredTxHash = await markDelivered(signer, manifestCid, buyer)
     return { messageTxHash: '', deliveredTxHash }
@@ -275,7 +507,33 @@ export async function deliverKey(
   return { messageTxHash: sent.txHash, deliveredTxHash }
 }
 
-/** Unwrap K from a manifest's encryption block: signature channel first (deterministic signers), passphrase callback as fallback */
+/** v2 delivery: same as deliverKey, but markDelivered goes by orderId (order-snapshot model) */
+export async function deliverKeyV2(
+  signer: EvmSigner,
+  manifestCid: string,
+  manifest: Manifest | null,
+  buyer: string,
+  orderId: bigint,
+  getPassphrase: () => Promise<string | null>,
+): Promise<{ messageTxHash: string; deliveredTxHash: string }> {
+  if (!manifest?.encryption) throw new Error(t('errors.paywallNotEncrypted'))
+  // self-trade (acceptance path): buyer == seller, the pdgrant channel is unnecessary — only markDelivered
+  if (buyer.toLowerCase() === signer.address.toLowerCase()) {
+    const deliveredTxHash = await markDeliveredV2(signer, orderId)
+    return { messageTxHash: '', deliveredTxHash }
+  }
+  const keyBytes = await unwrapManifestKey(signer, manifest, getPassphrase)
+  const buyerKeyB64 = await getAnnouncedKey(buyer)
+  if (!buyerKeyB64) throw new Error(t('errors.mailboxRecipientNoKey'))
+  const inner = boxEncrypt(publicKeyFromBase64(buyerKeyB64), keyBytes)
+  const grant: PdGrant = { type: 'pdgrant', manifestCid, wrappedK: JSON.stringify(inner) }
+  const sent = await sendEncryptedMessage(signer, buyer, JSON.stringify(grant))
+  const deliveredTxHash = await markDeliveredV2(signer, orderId)
+  return { messageTxHash: sent.txHash, deliveredTxHash }
+}
+
+/** unwrap K from the manifest's encryption block: signature channel first
+ * (deterministic signer), falling back to the passphrase callback */
 export async function unwrapManifestKey(
   signer: EvmSigner,
   manifest: Manifest,
@@ -290,7 +548,7 @@ export async function unwrapManifestKey(
       const key = await tryUnwrapWithSignature(sigWrap, signature)
       if (key) return key
     } catch {
-      // signature refused → fall back to the passphrase
+      // signature declined → fall back to the passphrase
     }
   }
   const passWrap = manifest.encryption.wrappedKeys.find((w) => w.mode === 'passphrase-v1')
@@ -300,7 +558,8 @@ export async function unwrapManifestKey(
   return unwrapWithPassphrase(passWrap, passphrase)
 }
 
-/** Buyer side: unwrap K from a pdgrant message plaintext (local derived keypair; injected wallets decrypt in-wallet) */
+/** buyer unwraps K from the pdgrant message plaintext (local keys derive
+ * deterministically; injected wallets decrypt in-wallet) */
 export async function unwrapDeliveredKey(signer: EvmSigner, grant: PdGrant): Promise<Uint8Array> {
   if (signer.kind === 'local') {
     const secret = await localBoxSecretKey(signer)
