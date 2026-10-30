@@ -44,10 +44,10 @@ const record = (over = {}) => ({
   ...over,
 })
 
-// ---- 1. mergeMessage 幂等语义（R03/R04）----
+// ---- 1. mergeMessage idempotent semantics (R03/R04) ----
 {
   const a = record()
-  const replay = record({ plain: null, read: false, blockHash: null }) // 重放：无明文、未读
+  const replay = record({ plain: null, read: false, blockHash: null }) // replay: no plaintext, unread
   const merged = mergeMessage(a, replay)
   ok(merged.plain === null && merged.read === false, '1 first merge: a locked message stays locked')
   const withPlain = mergeMessage(a, record({ plain: 'hello', decryptStatus: 'ok', read: true }))
@@ -64,12 +64,12 @@ const record = (over = {}) => ({
   ok(norm.chainId === 870 && norm.decryptStatus === 'ok', '1 legacy records normalized on read (missing fields defaulted)')
 }
 
-// ---- 2. putMessage 原子合并写（读-合并-写同事务）----
+// ---- 2. putMessage atomic merge write (read-merge-write in one transaction) ----
 {
   await putMessage(record({ id: 'c1:1:0xa', plain: null, decryptStatus: 'locked' }))
-  await putMessage(record({ id: 'c1:1:0xa', plain: null, decryptStatus: 'locked' })) // 重放
+  await putMessage(record({ id: 'c1:1:0xa', plain: null, decryptStatus: 'locked' })) // replay
   await putMessageDecryptResult('c1:1:0xa', 'secret text', null)
-  await putMessage(record({ id: 'c1:1:0xa', plain: null, decryptStatus: 'locked' })) // 再重放
+  await putMessage(record({ id: 'c1:1:0xa', plain: null, decryptStatus: 'locked' })) // replay again
   const all = await listMessages()
   const m = all.find((x) => x.id === 'c1:1:0xa')
   ok(m?.plain === 'secret text' && m.decryptStatus === 'ok', '2 replay after successful decryption: plaintext and status kept')
@@ -79,10 +79,10 @@ const record = (over = {}) => ({
   ok(m2?.read === true, '2 read flag not reset by later writes')
 }
 
-// ---- 3. putMessagesWithCursor 原子性（R08）：坏记录使整批回滚，游标不推进 ----
+// ---- 3. putMessagesWithCursor atomicity (R08): a bad record aborts the batch, cursor not advanced ----
 {
   const good = record({ id: 'c2:1:0xb' })
-  // 无 id 的记录 → put 抛 DataError → 事务 abort
+  // a record without an id -> put throws DataError -> transaction aborts
   const bad = { ...record({ id: 'c2:2:0xc' }), id: undefined }
   let rejected = false
   try {
@@ -104,7 +104,7 @@ const record = (over = {}) => ({
   ok(cursor && cursor.block === 500 && cursor.blockHash === '0xh', '3 cursor written atomically with the batch (object value with checkpoint)')
 }
 
-// ---- 4. 游标键三元组隔离（R04）----
+// ---- 4. cursor key triple isolation (R04) ----
 {
   const k1 = cursorKeyFor('0xaaa4', '0xbbb4')
   const k2 = cursorKeyFor('0xaaa4', '0xbbb4')
@@ -118,9 +118,9 @@ const record = (over = {}) => ({
   ok((await getMeta(k1)).block === 100 && (await getMeta(k3)).block === 200, '4 per-contract cursors never overwrite each other')
 }
 
-// ---- 5. 解密重试（R03）：锁定 → 解密成功（无需重扫历史）；失败隔离 ----
+// ---- 5. decryption retry (R03): locked -> decrypted without rescanning history; failures isolated ----
 {
-  // viem HDAccount 本地签名者（RFC6979 确定性；本地签名零网络）
+  // viem HDAccount local signer (RFC6979 deterministic; local signing, zero network)
   const account = privateKeyToAccount('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d')
   const signer = { kind: 'local', address: account.address, account, label: 'local' }
   const me = account.address.toLowerCase()
@@ -136,12 +136,12 @@ const record = (over = {}) => ({
   await putMessage(mBad)
   await putMessage(mOther)
 
-  // 首次解密成功：明文恢复 + 状态 ok —— 不需要重扫任何历史块
+  // first decrypt succeeds: plaintext recovered + status ok — no historical rescan needed
   const plain = await decryptMessage(signer, (await listMessages()).find((x) => x.id === mOk.id))
   ok(plain === 'second try works', '5 locked message decrypts (the mechanism behind retry-after-decline recovery)')
   ok(((await listMessages()).find((x) => x.id === mOk.id)).decryptStatus === 'ok', '5 success status persisted')
 
-  // 单条失败不阻塞其余：批量解密 → 好消息成功、坏消息持久化失败原因
+  // one failure does not block the rest: bulk decrypt -> the good message succeeds, the bad one persists its reason
   const okCount = await decryptPendingMessages(signer)
   ok(okCount === 0, `5 bulk decrypt (the good message was already decrypted above)`)
   const after = await listMessages()
@@ -149,7 +149,7 @@ const record = (over = {}) => ({
   ok(bad.decryptStatus === 'failed' && !!bad.decryptError, '5 bad message failure reason persisted (per-message isolation)')
   ok(after.find((x) => x.id === mOther.id).decryptStatus === 'locked', '5 messages addressed to others untouched (recipient filter)')
 
-  // 坏消息重试仍失败（错误路径本身可重复调用，不抛出阻塞）
+  // retrying the bad message still fails (the error path is re-callable, not blocking)
   let threw = false
   try {
     await decryptMessage(signer, bad)
@@ -160,5 +160,5 @@ const record = (over = {}) => ({
   ok((await listMessages()).find((x) => x.id === mOk.id).plain === 'second try works', '5 retrying a failure does not damage the succeeded message')
 }
 
-console.log(`\n全部 ${passed} 项通过 ✓（mailbox-store-test）`)
+console.log(`\nAll ${passed} assertions passed ✓ (mailbox-store-test)`)
 process.exit(0)

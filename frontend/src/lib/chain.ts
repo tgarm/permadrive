@@ -12,7 +12,7 @@ import { tryDecodeRemark } from './dag.ts'
 import { t } from '../i18n/core.ts'
 
 export interface ExtractResult {
-  found: Map<string, Uint8Array> // cidString → 节点编码字节
+  found: Map<string, Uint8Array> // cid string -> encoded node bytes
   parentHash: string
   height: number
 }
@@ -21,8 +21,8 @@ export async function connectApi(
   url: string,
   { minIntervalMs = 1600, probeRetries = 8 }: { minIntervalMs?: number; probeRetries?: number } = {},
 ): Promise<ApiPromise> {
-  // 预热探测：限流封禁期可达几十分钟，先单发轻请求确认可用，
-  // 避免 ApiPromise 初始化的一串请求全部撞在封禁上（还会加重封禁）
+  // warm-up probe: rate-limit bans can last tens of minutes — check availability
+  // with one light request first, so ApiPromise init does not slam a ban (and extend it)
   const probe = new RawRpc(url, { minIntervalMs: Math.max(minIntervalMs, 5000), maxRetries: probeRetries })
   await probe.call('system_chain', [])
 
@@ -126,7 +126,7 @@ export class InclusionLostError extends Error {
 const LOOKBACK_BLOCKS = 2
 const REORG_RESCAN_BLOCKS = 8
 
-/** 按交易 hash 在 [fromHeight, best] 区间扫描包含块（恢复/核实共用入口） */
+/** Scan [fromHeight, best] for the tx hash (shared by recovery and verification) */
 export async function findInclusionByHash(
   api: ApiPromise,
   txHash: string,
@@ -136,7 +136,7 @@ export async function findInclusionByHash(
   const header = await api.rpc.chain.getHeader()
   for (let h = Math.max(0, fromHeight); h <= header.number.toNumber(); h++) {
     const bh = await api.rpc.chain.getBlockHash(h)
-    if (bh.toHex() === '0x' + '0'.repeat(64)) continue // 分叉边界可能短暂返回零 hash → 跳过
+    if (bh.toHex() === '0x' + '0'.repeat(64)) continue // fork boundaries may briefly return a zero hash — skip
     const signed = await api.rpc.chain.getBlock(bh)
     if (!signed?.block?.extrinsics) continue
     if (signed.block.extrinsics.some((ex) => ex.hash.toHex() === txHash)) {
@@ -164,7 +164,7 @@ export async function submitAndWaitConfirmed(
   }: { pollMs?: number; scanTimeoutMs?: number; confirmTimeoutMs?: number; depth?: number; onStage?: (stage: string, detail?: string) => void } = {},
 ): Promise<Inclusion> {
   const txHash = tx.hash.toHex()
-  // the start height must be read BEFORE submitting (R02: reading the head only
+  // the start height must be read BEFORE submitting (reading the head only
   // after the submit misses already-included blocks)
   const startHeight = (await api.rpc.chain.getHeader()).number.toNumber()
   onStage?.('submitting', `${(tx.encodedLength / 1024).toFixed(1)} KiB, ${txHash.slice(0, 18)}…`)
@@ -204,7 +204,7 @@ export async function submitAndWaitConfirmed(
     const done = await waitConfirmed(api, current, { depth, confirmDeadline, pollMs })
     if (typeof done === 'boolean' && done) return current
     if (done === 'timeout') throw new TxNotFoundError('timeout waiting for confirmation depth', { txHash, fromHeight: current.height })
-    // canonical 校验失败 → 回退窗口重扫
+    // canonical check failed -> rewind the window and rescan
     if (rescan > 3) {
       throw new InclusionLostError(`inclusion block reorged away (tx ${txHash.slice(0, 18)}…, last seen at #${current.height})`, { txHash })
     }

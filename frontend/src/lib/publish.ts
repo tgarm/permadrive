@@ -1,21 +1,15 @@
-// Publish flow (browser port of publish.mjs; three phases so the UI can pause
-// at the fee confirmation):
-//   prepareUpload(file)     pack + sha256 (pure local, no network)
-//   estimateFee(api, bytes) byteFee x total bytes — payment_queryInfo panics on
-//                           large remarks (mainnet runtime bug); use the first-
-//                           order approximation
-//   publishPrepared(...)    wallet signs → utility.batch first; degrade to
-//                           per-tx only on a definitive (capacity/format)
-//                           rejection proving non-acceptance →
-//                           confirmationDepth confirm → manifest v2
-//
-// Error model (design review R02): a failed submission does not mean "not
-// submitted". The publish task (tx hashes + start height + manifest rebuild
-// metadata) is persisted right after signing; every failure afterwards is
-// "result pending verification" — the only remedy is rescanning by hash
-// (verifyPublishTask), never auto-resending (a same-nonce resend trips the
-// (signer, nonce) dedup ban). Structured errors live in chain.ts (TxRejected /
-// TxResultUnknown / TxNotFound / InclusionLost).
+// Publish pipeline (browser version of publish.mjs, in three phases so the UI
+// can halt at the fee confirmation):
+//   prepareUpload(file)     pack + sha256 (purely local, no network)
+//   estimateFee(api, bytes) byteFee × total bytes — payment_queryInfo panics
+//                           on large remarks (mainnet runtime bug), so use a
+//                           first-order approximation
+//   publishPrepared(...)    wallet signs → utility.batch single tx preferred;
+//                           if the node rejects it, fall back to signing each
+//                           tx individually (measured on mainnet: 1 MB ≈ 17 nodes in a
+//                           single tx was untested at the time; batched per-tx
+//                           submission is a normal path, not an error) →
+//                           confirmationDepth confirmation → manifest v1
 
 import type { ApiPromise } from '@polkadot/api'
 import type { SubmittableExtrinsic } from '@polkadot/api/types'
@@ -45,17 +39,6 @@ export interface PreparedUpload {
   totalBytes: number
 }
 
-/**
- * Manifest assembly overrides (encrypted uploads): the DAG packs the ciphertext
- * and prepared.file holds ciphertext metadata — manifest.file must be overridden
- * with plaintext metadata (name/size are public); encryption carries the v2
- * encryption block; the plaintext sha256 (file.sha256) verifies after decryption.
- */
-export interface PublishOverrides {
-  file?: Partial<Manifest['file']>
-  encryption?: ManifestEncryption | null
-}
-
 export async function prepareUpload(file: File): Promise<PreparedUpload> {
   const [packed, sha256] = await Promise.all([packFile(file), sha256Hex(await file.arrayBuffer())])
   return {
@@ -66,7 +49,8 @@ export async function prepareUpload(file: File): Promise<PreparedUpload> {
   }
 }
 
-// First-order fee approximation (PoC measured the error negligible at 200KB: base fee is negligible)
+// First-order fee approximation (measured on a 200 KB PoC: error negligible —
+// the base fee contribution is negligible)
 export async function estimateFee(api: ApiPromise, totalBytes: number): Promise<{ shannons: bigint; ai3: number }> {
   const fee = await api.query.transactionFees.transactionByteFee()
   const json = fee.toJSON() as { current?: string | number }
@@ -83,6 +67,18 @@ export type PublishStage = 'signing' | 'submitting' | 'submitted' | 'scanning' |
 // a block, and resending the same nonce trips the dedup ban.
 const BATCH_CAPACITY_RE = /too large|exceeds|exhaust|block capacity|requires? more weight|weight.{0,40}exceed|invalid transaction (version|format)|malformed/i
 const MAYBE_RECEIVED_RE = /banned|already imported|usurped|future|not found|timeout/i
+
+/**
+ * Manifest assembly overrides (encrypted uploads): the DAG is packed from the
+ * CIPHERTEXT, so prepared.file holds ciphertext metadata — manifest.file must
+ * be overridden with the plaintext metadata (filenames/sizes are public), and
+ * encryption carries the v2 block. file.sha256 is the plaintext sha256,
+ * checked after decryption.
+ */
+export interface PublishOverrides {
+  file?: Partial<Manifest['file']>
+  encryption?: ManifestEncryption | null
+}
 
 export async function publishPrepared(
   api: ApiPromise,
@@ -159,7 +155,7 @@ export async function publishPrepared(
 
   const chainName = (await api.rpc.system.chain()).toString()
   return {
-    version: 2, // v2 起新发布一律 v2（encryption null = 明文上传，是 v1 的超集）
+    version: 2, // new publishes are v2 from here (encryption null = plain upload, a v1 superset)
     network: /mainnet/i.test(chainName) ? 'mainnet' : chainName,
     rootCid: prepared.rootCid,
     file: { ...prepared.file, ...overrides.file },
@@ -172,7 +168,7 @@ export async function publishPrepared(
   }
 }
 
-// ---- "pending verification" recovery (design review R02) ----
+// ---- "pending verification" recovery (design review) ----
 
 /** All publish tasks pending verification (refresh on page load / after a failed publish) */
 export const listPendingPublish = (): Promise<PublishTaskRecord[]> =>
@@ -203,7 +199,7 @@ export async function verifyPublishTask(
     file: { ...record.file, ...(record.overridesFile as Partial<Manifest['file']> | null) } as Manifest['file'],
     encryption: (record.encryption as ManifestEncryption | null) ?? null,
     compression: null,
-    uploader: { address: '' }, // 重建场景：发布者地址未入任务（不影响取回）
+    uploader: { address: '' }, // rebuilt scenario: the uploader address is not in the task (irrelevant for retrieval)
     nodes: record.nodes,
     txs: inclusions,
     submittedAt: new Date(record.createdAt).toISOString(),

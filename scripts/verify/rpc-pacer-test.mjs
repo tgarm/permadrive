@@ -1,5 +1,6 @@
-// R07 离线测试（doc/13）：Pacer 原子预订、请求超时、写请求不盲重试。
-// 直接导入前端源码（Node 26 type stripping），零网络依赖（本地 http server）。
+// R07 offline tests (design review): Pacer atomic slot reservation, request
+// timeouts, no blind retry for tx writes. Imports the frontend sources directly
+// (Node type stripping), zero network dependencies (a local http server).
 //   node rpc-pacer-test.mjs
 
 import http from 'node:http'
@@ -18,7 +19,7 @@ const ok = (cond, label) => {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// 本地 HTTP server 工厂：handler(req, res, body)；返回 { url, close, hits }
+// local http server factory: handler(req, res, body) -> { url, close, hits }
 function server(handler) {
   const hits = { count: 0 }
   const s = http.createServer((req, res) => {
@@ -32,7 +33,7 @@ function server(handler) {
   return new Promise((resolve) => {
     s.listen(0, '127.0.0.1', () => {
       const url = `http://127.0.0.1:${s.address().port}`
-      // 超时竞速不会取消底层 fetch（socket 仍连着）—— 关停前强制断开
+      // the timeout race does not cancel the underlying fetch (the socket stays open) — force-close before server.close
       resolve({ url, close: () => new Promise((r) => { s.closeAllConnections?.(); s.close(() => r()) }), hits })
     })
   })
@@ -41,31 +42,31 @@ function server(handler) {
 const rpcBody = (result) => JSON.stringify({ jsonrpc: '2.0', id: 1, result })
 const rpcError = (code, message) => JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code, message } })
 
-// ---- 1. Pacer 原子预订：并发 20 个 waitTurn，起点间距 ≥ interval（旧实现会同醒齐发）----
+// ---- 1. Pacer atomic reservation: 20 concurrent waitTurns, starts spaced >= interval (the old implementation woke together) ----
 {
   const pacer = new Pacer(20)
   const t0 = Date.now()
   await Promise.all(Array.from({ length: 20 }, () => pacer.waitTurn()))
   const elapsed = Date.now() - t0
-  // 20 个错峰槽位：第 20 个起点 ≈ 19×20=380ms；同醒齐发的旧实现 ≈ 20ms
-  ok(elapsed >= 360, `并发 20 waitTurn 总耗时 ${elapsed}ms ≥ 360ms（槽位错峰，非齐发）`)
-  ok(elapsed < 3000, `并发 20 waitTurn 总耗时 ${elapsed}ms < 3000ms（无串行叠加）`)
+  // 20 staggered slots: the 20th start is about 19x20=380ms; the old burst implementation would take about 20ms
+  ok(elapsed >= 360, `20 concurrent waitTurns took ${elapsed}ms >= 360ms (staggered slots, not a burst)`)
+  ok(elapsed < 3000, `20 concurrent waitTurns took ${elapsed}ms < 3000ms (no serial stacking)`)
 }
 
-// 顺序调用不受影响：两次 waitTurn 间隔 ≥ interval
+// sequential calls unaffected: two waitTurns spaced >= interval
 {
   const pacer = new Pacer(30)
   const t0 = Date.now()
   await pacer.waitTurn()
   await pacer.waitTurn()
   const elapsed = Date.now() - t0
-  ok(elapsed >= 25, `顺序两次 waitTurn 间隔 ${elapsed}ms ≥ interval`)
+  ok(elapsed >= 25, `two sequential waitTurns spaced ${elapsed}ms >= interval`)
 }
 
-// ---- 2. 请求超时（AbortSignal）：黑洞 server 到期释放，不再永久挂起 ----
+// ---- 2. request timeout (AbortSignal): a black-holed server releases on time ----
 {
   const s = await server(() => {
-    /* 永不响应 */
+    /* never respond */
   })
   const rpc = new RawRpc(s.url, { minIntervalMs: 10, maxRetries: 1, timeoutMs: 300 })
   const t0 = Date.now()
@@ -75,11 +76,11 @@ const rpcError = (code, message) => JSON.stringify({ jsonrpc: '2.0', id: 1, erro
   } catch (e) {
     err = e
   }
-  ok(err && /request timeout/.test(err.message), `黑洞请求 ${Date.now() - t0}ms 内超时释放（${err?.message.slice(0, 60)}）`)
+  ok(err && /request timeout/.test(err.message), `black-holed request timed out in ${Date.now() - t0}ms (${err?.message.slice(0, 60)})`)
   await s.close()
 }
 
-// ---- 3. 读请求退避重试仍然工作：前两次 503，第三次成功 ----
+// ---- 3. read retries still work: two 503s then success ----
 {
   let n = 0
   const s = await server((req, res) => {
@@ -93,14 +94,14 @@ const rpcError = (code, message) => JSON.stringify({ jsonrpc: '2.0', id: 1, erro
   })
   const rpc = new RawRpc(s.url, { minIntervalMs: 10, maxRetries: 5, timeoutMs: 1000 })
   const out = await rpc.call('system_chain')
-  ok(out === 'flaky-ok', `读请求瞬时失败后退避重试成功（${n} 次请求）`)
+  ok(out === 'flaky-ok', `read retried with backoff after transient failures (${n} requests)`)
   await s.close()
 }
 
-// ---- 4. 写请求（author_submitExtrinsic）黑洞：结果未知，绝不重试 ----
+// ---- 4. a black-holed tx write: result unknown, never retried ----
 {
   const s = await server(() => {
-    /* 永不响应 */
+    /* never respond */
   })
   const provider = new PacedHttpProvider(s.url, { minIntervalMs: 10, maxRetries: 6, timeoutMs: 300 })
   const t0 = Date.now()
@@ -110,12 +111,12 @@ const rpcError = (code, message) => JSON.stringify({ jsonrpc: '2.0', id: 1, erro
   } catch (e) {
     err = e
   }
-  ok(err instanceof SubmitResultUnknownError, `写请求黑洞 → SubmitResultUnknownError（${Date.now() - t0}ms）`)
-  ok(s.hits.count === 1, `写请求失败后仅发出 1 次（未重试重发）`)
+  ok(err instanceof SubmitResultUnknownError, `black-holed write -> SubmitResultUnknownError (${Date.now() - t0}ms)`)
+  ok(s.hits.count === 1, `exactly 1 write attempt (no resend)`)
   await s.close()
 }
 
-// ---- 5. 写请求节点明确拒绝（JSON-RPC 错误响应带 code）：原样上抛，非「结果未知」 ----
+// ---- 5. a definitive node rejection (JSON-RPC error with code) rethrows ----
 {
   const s = await server((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -128,16 +129,16 @@ const rpcError = (code, message) => JSON.stringify({ jsonrpc: '2.0', id: 1, erro
   } catch (e) {
     err = e
   }
-  ok(err && !(err instanceof SubmitResultUnknownError), '节点明确拒绝 → 非 SubmitResultUnknownError')
-  ok((err?.code ?? null) === 1012, `拒绝错误携带 code=1012（${String(err?.message).slice(0, 60)}…）`)
-  ok(s.hits.count === 1, `明确拒绝不重试`)
+  ok(err && !(err instanceof SubmitResultUnknownError), 'definitive rejection is not SubmitResultUnknownError')
+  ok((err?.code ?? null) === 1012, `the rejection carries code=1012 (${String(err?.message).slice(0, 60)}...)`)
+  ok(s.hits.count === 1, `a definitive rejection is not retried`)
   await s.close()
 }
 
-// ---- 6. 读请求黑洞：重试预算耗尽后报传输错误（不无限挂起） ----
+// ---- 6. a black-holed read: retries exhaust, then a transport error ----
 {
   const s = await server(() => {
-    /* 永不响应 */
+    /* never respond */
   })
   const provider = new PacedHttpProvider(s.url, { minIntervalMs: 10, maxRetries: 2, timeoutMs: 200 })
   let err = null
@@ -146,10 +147,10 @@ const rpcError = (code, message) => JSON.stringify({ jsonrpc: '2.0', id: 1, erro
   } catch (e) {
     err = e
   }
-  ok(err && /request timeout/.test(err.message), `读请求黑洞 → 超时错误（重试 ${s.hits.count} 次后放弃）`)
-  ok(s.hits.count === 2, `读请求重试预算 = maxRetries`)
+  ok(err && /request timeout/.test(err.message), `black-holed read -> timeout error (gave up after ${s.hits.count} attempts)`)
+  ok(s.hits.count === 2, `read retry budget = maxRetries`)
   await s.close()
 }
 
-console.log(`\n全部 ${passed} 项通过 ✓（rpc-pacer-test）`)
+console.log(`\nAll ${passed} assertions passed ✓ (rpc-pacer-test)`)
 process.exit(0)

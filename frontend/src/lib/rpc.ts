@@ -70,7 +70,8 @@ export class Pacer {
   }
 }
 
-// Per-request hard timeout via AbortSignal: black-holed connections release on time, making upper-layer retries/deadlines meaningful
+// Per-request hard timeout via AbortSignal: black-holed connections release on
+// time, making upper-layer retries/deadlines meaningful
 const REQUEST_TIMEOUT_MS = 30_000
 
 async function postJson(url: string, body: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
@@ -119,7 +120,7 @@ export interface JsonRpcRequest {
   params: unknown[]
 }
 
-// Bare JSON-RPC client (when no ApiPromise is needed)
+// Bare JSON-RPC client (for cases that do not spin up an ApiPromise)
 export class RawRpc {
   url: string
   pacer: Pacer
@@ -133,7 +134,7 @@ export class RawRpc {
     this.timeoutMs = timeoutMs
   }
 
-  // 批量 JSON-RPC（数组 POST；响应按 id 还原顺序，未命中为 undefined）
+  // Batch JSON-RPC (array POST; the reply is reassembled by id, misses are undefined)
   async callBatch(requests: JsonRpcRequest[]): Promise<({ id: number; result?: unknown; error?: unknown } | undefined)[]> {
     let delay = 3000
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
@@ -174,15 +175,15 @@ export class RawRpc {
   }
 }
 
+// HttpProvider subclass for ApiPromise: every send goes through the same
+// throttle and backoff. Calls the library issues internally (init/metadata)
+// need the same throttling, otherwise the public node's rate limiting kicks in.
 // Tx-write methods: a failed send may mean the node already received the
-// transaction (a lost response ≠ not submitted). Resending risks the
-// (signer, nonce) dedup ban — write failures always surface as "result
-// unknown" and are never auto-retried.
+// transaction (a lost response does not mean it was not submitted). Resending
+// risks the (signer, nonce) dedup ban — write failures always surface as
+// "result unknown" and are never auto-retried.
 const WRITE_METHODS = new Set(['author_submitExtrinsic', 'author_submitAndWatchExtrinsic', 'author_pendingExtrinsics'])
 
-// HttpProvider subclass for ApiPromise: every send goes through the same pacer
-// and backoff. Library-internal calls (init/metadata) need the throttling too,
-// otherwise the public node rate-limits.
 export class PacedHttpProvider extends HttpProvider {
   private paced: Pacer
   private maxRetries: number
@@ -195,9 +196,9 @@ export class PacedHttpProvider extends HttpProvider {
     this.timeoutMs = timeoutMs
   }
 
-  // polkadot's HttpProvider fetch has no timeout of its own (black-hole hangs) —
-  // race a timer: on timeout only the wait is abandoned (the underlying
-  // connection cannot be cancelled from outside) and classified as transport error
+  // polkadot's own provider fetch has no timeout (black-hole hangs) — race a
+  // timer: on timeout only the wait is abandoned (the underlying connection
+  // cannot be cancelled from outside) and the error is classified as transport
   private withTimeout<T>(p: Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => reject(transportError(`transport: request timeout after ${this.timeoutMs}ms`)), this.timeoutMs)
@@ -221,13 +222,14 @@ export class PacedHttpProvider extends HttpProvider {
           // (a definitive rejection, incl. pool rejections; the shape of
           // polkadot's provider RpcError) — rethrow for upper-layer classification.
           // Anything else (timeout/disconnect/empty/HTTP != 200) = "submit result
-          // unknown"; never auto-resent (lost response ≠ not submitted, and
-          // resending the same nonce risks the dedup ban)
+          // unknown"; never auto-resent (lost response does not mean not
+          // submitted, and resending the same nonce risks the dedup ban)
           if (typeof (e as { code?: unknown })?.code === 'number') throw e
           throw new SubmitResultUnknownError(`submit result unknown: ${(e as Error)?.message ?? String(e)}`, { cause: e })
         }
         const message = (e as Error)?.message ?? String(e)
-        // tx-pool errors are deterministic (banned/invalid/over-limit); resending only makes it worse
+        // Tx-pool errors are deterministic (banned/invalid/oversized); resending
+        // the same tx only makes things worse
         const poolError = /banned|already imported|invalid|priority|too large|exhaust/i.test(message)
         const transient =
           !poolError &&

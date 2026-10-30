@@ -91,8 +91,9 @@ npm run vault-crypto      # offline vault envelope/keystore crypto selftest (no 
 |---|---|---|
 | FileRegistry v2 | `0x79a22e5dc2e0613d8e9b491a1a51038b9197b185` | Active; register charges a dev fee: `max(0.01 AI3, size × ~1.05e11 wei)`, overpayment is refunded |
 | Mailbox | `0x3446abe95edc17e4056a28d7c5fb10d579395200` | Active; on-chain private messages — `announceEncryptionKey` + `send` (permissionless, ciphertext ≤ 8 KiB) |
-| Paywall | `0xb51be7a5cc1a03fd51892d9db1fc942aa164405a` | Active; paid-download escrow (3-day delivery timeout / 3-day grace), dev fee 10% taken only on release |
-| Paywall (test) | `0x4db00db74769a0e8d38654bbe20144668c105acf` | Active; 5-minute timeouts — for the selftest to walk the full state machine |
+| Paywall v1 | `0xb51be7a5cc1a03fd51892d9db1fc942aa164405a` | **Frozen, read-only** (seller-overwrite flaw, 2026-10-30): existing orders keep refund / confirm-receipt / withdraw entries; new listings and purchases are disabled |
+| Paywall v1 (test) | `0x4db00db74769a0e8d38654bbe20144668c105acf` | Frozen, read-only (same flaw) |
+| Paywall v2 | see `contracts/deployments.json` after deployment | Order-model redesign: seller-namespace listings (`listingId = keccak256(seller, key)`), immutable order snapshots (seller/price/feeBps) with independent orderIds, `purchase(key, seller, maxPrice)`; an offline adversarial suite (43 assertions, local ganache) covers overwrite, front-running, reprice/delist/relist and fund conservation. Deployment is a deliberate separate step |
 | FileRegistry v1 | `0x1751f7534b85417da6e093a2e85b4b7b90ee2e4a` | Frozen, read-only |
 
 Deployment records (tx / block) live in [contracts/deployments.json](contracts/deployments.json); explorer: <https://explorer.auto-evm.mainnet.autonomys.xyz>
@@ -103,6 +104,8 @@ Deployment records (tx / block) live in [contracts/deployments.json](contracts/d
 - **The vault keystore is the only universal recovery path** — wallet-signature unlock depends on reproducible signatures (verified for local EVM keys; most extension wallets work, some may not). Losing both the wallet AND the keystore file means the ciphertext stays on-chain forever but can never be opened.
 - **Public RPCs are rate-limited** — the scripts throttle and back off; do not hammer public nodes with concurrency.
 - **Confirmation policy** — publishes confirm at 12-block depth + canonical check (Autonomys testnet finality lag can reach 15 days; never wait for finalized).
+- **Paywall v1 security note (2026-10-30)** — a design review found that anyone could overwrite an existing listing (the non-zero `setPrice` branch had no ownership check) and that settlements read the *current* listing seller, so an attacker could re-list a paid key, mark it delivered and drain escrowed funds without ever holding the file key. The contract has no upgrade path; v1 is frozen read-only (existing orders keep refund / confirm / withdraw), and `contracts/PaywallV2.sol` fixes the order model (seller namespace, immutable order snapshots, independent orderIds, `maxPrice` bound). The frontend activates v2 once its address is configured in Settings.
+- **Publish recovery** — a publish whose confirmation does not finish (timeout / lost response) is never auto-resent; the signed tx hashes and rebuild metadata are persisted locally and the files page offers a hash-based "verify" that rebuilds the manifest without republishing.
 - **Real costs** — the frontend and scripts operate on mainnet and spend real AI3; the contracts are unaudited — verify with small amounts first.
 
 ## Ecosystem

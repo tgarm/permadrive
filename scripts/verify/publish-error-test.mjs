@@ -54,8 +54,8 @@ function mockApi(scenario) {
             scenario.batchRejected = true
             throw Object.assign(new Error('Transaction is too large: 2.1 MiB, maximum 10 MiB'), { code: 1012 })
           }
-          if (scenario.submitBehavior === 'never-included') return undefined // 接受但永不入块
-          // mock 约定：fakeTx.toHex() 即返回自身 hash —— 提交成功 = 立即入块
+          if (scenario.submitBehavior === 'never-included') return undefined // accepted but never included
+          // mock convention: fakeTx.toHex() IS the tx hash — a successful submit includes it instantly
           scenario.chain.push(hex)
           return undefined
         },
@@ -87,7 +87,7 @@ function mockApi(scenario) {
 }
 
 function fakeTx(hash, _tag) {
-  // mock 约定：toHex() 返回自身 hash（提交该 hex = 该 hash 交易入块）
+  // mock convention: toHex() returns the tx own hash (submitting that hex includes it)
   return {
     hash: { toHex: () => hash },
     encodedLength: 1024,
@@ -112,7 +112,7 @@ const prepared = (nodes = 3, cid = `bafk-sc${++cidSeq}`) => ({
 const onStage = () => {}
 const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
 
-// ---- S1 节点已接受但响应丢失 → 结果未知，不降级，任务落盘 ----
+// ---- S1 accepted but response lost -> result unknown, no fallback, task persisted ----
 {
   const scenario = { submitBehavior: 'lost-response', submits: [], chain: [], remarkCalls: 0, remarkHashes: [], chainPushIdx: 0 }
   const api = mockApi(scenario)
@@ -129,7 +129,7 @@ const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
   ok(pending[0]?.status === 'pending-verify', 'S1 task status pending-verify')
 }
 
-// ---- S2 提交成功但永不入块 → 扫描超时 TxNotFoundError，不降级 ----
+// ---- S2 accepted but never included -> TxNotFoundError, no fallback ----
 {
   const scenario = { submitBehavior: 'never-included', submits: [], chain: [], remarkCalls: 0, remarkHashes: [], chainPushIdx: 0 }
   const api = mockApi(scenario)
@@ -147,7 +147,7 @@ const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
   ok(pending.some((p) => p.rootCid === sc2cid), 'S2 task persisted for later verification')
 }
 
-// ---- S3 拒签：签名前失败，无任务落盘，不降级 ----
+// ---- S3 declined signing: pre-signing failure, no task, no fallback ----
 {
   const scenario = { submitBehavior: 'ok', submits: [], chain: [], remarkCalls: 0, remarkHashes: [], chainPushIdx: 0, signThrows: true }
   const api = mockApi(scenario)
@@ -170,7 +170,7 @@ const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
   ok(!pending.some((p) => p.rootCid === sc3cid), `S3 pre-signing failure: no task persisted for this scenario (earlier scenarios not counted)`)
 }
 
-// ---- S4 batch 明确容量拒绝 → 降级逐笔并全部确认 ----
+// ---- S4 definitive capacity rejection -> per-tx fallback, all confirmed ----
 {
   const scenario = { submitBehavior: 'too-large', submits: [], chain: [], remarkCalls: 0, remarkHashes: [], chainPushIdx: 0 }
   const api = mockApi(scenario)
@@ -190,7 +190,7 @@ const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
   ok(manifest?.network === 'mainnet', `S4 network identified as mainnet`)
 }
 
-// ---- S5 banned 拒绝 → 不降级（同交易可能在池中），任务落盘 ----
+// ---- S5 banned rejection -> no fallback (the tx may be in the pool), task persisted ----
 {
   const scenario = { submitBehavior: 'banned', submits: [], chain: [], remarkCalls: 0, remarkHashes: [], chainPushIdx: 0 }
   const api = mockApi(scenario)
@@ -207,11 +207,11 @@ const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
   ok(pending.filter((p) => p.rootCid === sc5cid).length === 1, `S5 task kept (the batch hash is the verification handle)`)
 }
 
-// ---- S6 按任务 hash 续扫恢复 manifest（交易已上链场景） ----
+// ---- S6 recover the manifest by rescanning the task hashes (tx on-chain) ----
 {
   const pending = await listPendingPublish()
   const record = pending.find((p) => p.rootCid?.startsWith('bafk-s5'))
-  // 模拟交易此后入块：把 S5 落盘的 batch hash 塞进链
+  // simulate the tx getting included afterwards: seed the chain with the S5 batch hash
   const api = mockApi({ submitBehavior: 'ok', submits: [], chain: record.txHashes.slice(), remarkCalls: 0, remarkHashes: [], chainPushIdx: 0, headStep: 1 })
   const manifest = await verifyPublishTask(api, record, { depth: 1, timeoutMs: 800 })
   ok(manifest !== null, 'S6 rescan found every tx and recovered the manifest')
@@ -220,7 +220,7 @@ const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
   ok(!(await listPendingPublish()).some((p) => p.rootCid === record.rootCid), 'S6 task cleaned up after successful recovery')
 }
 
-// ---- S7 续扫仍未找到 → 返回 null，任务保留 ----
+// ---- S7 still not found -> null, task kept ----
 {
   const scenario = { submitBehavior: 'never-included', submits: [], chain: [], remarkCalls: 0, remarkHashes: [], chainPushIdx: 0 }
   scenario.headStep = 1
@@ -242,5 +242,5 @@ const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
   ok(!(await listPendingPublish()).some((p) => p.id === record.id), 'S7 task removed after dismissal')
 }
 
-console.log(`\n全部 ${passed} 项通过 ✓（publish-error-test）`)
+console.log(`\nAll ${passed} assertions passed ✓ (publish-error-test)`)
 process.exit(0)

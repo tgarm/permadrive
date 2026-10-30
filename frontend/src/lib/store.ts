@@ -1,13 +1,19 @@
-// IndexedDB：本地索引以 rootCid 为主键（doc/04 §三.4 —— 换设备只需 manifest
-// 集合即可完整恢复）。archive 状态（indexer 轮询进度）单独存 tasks，不进
-// manifest（manifest 是自包含分享单元，格式定稿 doc/04 §四）。
-// P2（v2）：registry 映射表 rootCid → {manifestCid, height} —— manifest 文件
-// 的发布定位是「同步到链上目录」的产物，同样不进 manifest 本体。
-// P3（v3）：notes / vaults 两 store。笔记记录存标题+草稿+版本元数据（版本链
-// 权威在链上目录）；vault 记录存最新信封（密文）+ 版本元数据 —— 解锁后的明文
-// 条目只在内存，绝不入 IndexedDB。
-// P4（v4，批次 B）：messages（链上信箱本地缓存）+ meta（kv：getLogs 游标）。
-// 收信解密后的明文缓存本地；发件箱仅本机缓存（换设备发件历史不恢复，doc/12 §四）。
+// IndexedDB: the local index is keyed by rootCid (cross-device recovery needs
+// only the manifest set). Archive status (indexer polling progress) is stored
+// separately in tasks, not inside the manifest (the manifest is a
+// self-contained shareable unit).
+// (v2): the registry mapping table rootCid → {manifestCid, height} — the
+// manifest file's publication location is the product of "sync to the on-chain
+// registry" and likewise stays out of the manifest itself.
+// (v3): notes / vaults stores. Note records keep title + draft + version
+// metadata (the authoritative version chain lives in the on-chain registry);
+// vault records keep the latest envelope (ciphertext) + version metadata —
+// decrypted entries live in memory only and never reach IndexedDB.
+// (v4): messages (on-chain mailbox local cache) + meta (kv: the getLogs
+// cursor). Received mail is cached as plaintext after decryption; the outbox
+// plaintext is local-only by design (not restored on a new device).
+// Design-review R03/R04 extend MessageRecord (decrypt status, chain/block
+// fields) and R08 reworks the transaction semantics below.
 
 import type { Manifest } from './manifest'
 import type { VaultEnvelopeV1 } from './vaultCrypto'
@@ -33,17 +39,18 @@ export interface TaskRecord {
   updatedAt: number
 }
 
-// ---- 发布任务（doc/13 R02）----
-// 签名后、提交前落盘：交易 hash + 起始高度 + manifest 重建所需元数据。提交
-// 结果未知（超时/响应丢失/确认失败）时按 hash 续扫核实，绝不自动重发
-//（同 nonce 重发会撞 (signer, nonce) 去重，坑 10）。与 archive-watch 共用
-// tasks store，id 用 'publish:' 前缀隔离。
+// ---- publish tasks (design review R02) ----
+// Persisted right after signing, before submitting: tx hashes + start height +
+// the metadata needed to rebuild the manifest. When the submit result is unknown
+// (timeout / lost response / confirm failure), verify by rescanning hashes —
+// never auto-resend (a same-nonce resend trips the (signer, nonce) dedup ban).
+// Shares the tasks store with archive-watch, ids prefixed 'publish:'.
 export interface PublishTaskRecord {
   id: string // 'publish:' + rootCid
   kind: 'publish'
   rootCid: string
   file: { name: string; size: number; sha256: string; mimeType: string | null }
-  /** manifest 组装覆盖（加密上传时的明文元数据 + encryption 块） */
+  /** manifest assembly overrides (plaintext metadata + encryption block for encrypted uploads) */
   overridesFile: Record<string, unknown> | null
   encryption: unknown | null
   nodes: { cid: string; blake3: string; bytes: number }[]
@@ -56,22 +63,22 @@ export interface PublishTaskRecord {
   updatedAt: number
 }
 
-// 链上目录登记记录（本地缓存：谁已托管、manifest 文件在哪个块）
+// On-chain registry record (local cache: who has custody, and which block the manifest file landed in)
 export interface RegistryRecord {
-  rootCid: string // 文件 manifest 的 rootCid（主键，与 manifests 表对齐）
-  manifestCid: string // manifest 文件（再入 DSN）的 root CID
-  height: number // manifest 文件 remark 所在块
-  evmAddress: string // 登记者
+  rootCid: string // rootCid of the file's manifest (primary key, aligned with the manifests store)
+  manifestCid: string // root CID of the manifest file (re-published into the DSN)
+  height: number // block containing the manifest file's remark
+  evmAddress: string // registrant
   syncedAt: number
 }
 
-// ---- P3：笔记（doc/10 §一）----
+// ---- notes ----
 
 export interface NoteVersionRecord {
-  rootCid: string // 内容文件 DAG root（= manifests 表键，取回内容用）
-  manifestCid: string // manifest 再入 DSN 的 root CID（Registry 登记值）
-  height: number // manifest 文件所在块
-  name: string // pdnote-{id}-v{n}-{slug}.md（分组协议串）
+  rootCid: string // content file DAG root (= manifests store key, used for retrieval)
+  manifestCid: string // root CID of the manifest re-published into the DSN (registry value)
+  height: number // block containing the manifest file
+  name: string // pdnote-{id}-{slug}.md (grouping convention)
   version: number
   size: number
   savedAt: number
@@ -80,17 +87,17 @@ export interface NoteVersionRecord {
 export interface NoteRecord {
   id: string
   title: string
-  content: string // 当前草稿（本地明文；不自动上链）
+  content: string // current local draft (plaintext; never auto-published)
   versions: NoteVersionRecord[]
   createdAt: number
   updatedAt: number
 }
 
-// ---- P3：密码库（doc/10 §二）----
+// ---- vault ----
 
 export interface VaultVersionRecord {
-  rootCid: string // 信封文件 DAG root（= manifests 表键）
-  manifestCid: string // manifest 再入 DSN 的 root CID（Registry 登记值）
+  rootCid: string // envelope file DAG root (= manifests store key)
+  manifestCid: string // root CID of the manifest re-published into the DSN (registry value)
   height: number
   name: string // pdvault-{addr8}.json
   size: number
@@ -98,75 +105,10 @@ export interface VaultVersionRecord {
 }
 
 export interface VaultRecord {
-  address: string // 属主 EVM 地址（小写，主键）
-  envelope: VaultEnvelopeV1 // 最新信封（密文；明文条目不落盘）
+  address: string // owner EVM address (lowercase, primary key)
+  envelope: VaultEnvelopeV1 // latest envelope (ciphertext; plaintext entries never stored)
   versions: VaultVersionRecord[]
   createdAt: number
-}
-
-// ---- P4: on-chain mailbox (batch B; R03/R04 extensions) ----
-
-// One local message record. Inbox records cache the decrypted plaintext
-// (plain); the outbox (sentByMe) holds plaintext only on the sending device.
-// R03: sync (pull on-chain ciphertext) and decryption are separated —
-// decryptStatus tracks each message; failures are retryable singly or in bulk
-// (the cursor means "logs persisted", not "decrypted").
-// R04: chainId/blockNumber/blockHash recorded (cursor isolated by
-// chainId+contract+account).
-export interface MessageRecord {
-  id: string // 复合键 `${contract}:${eventId}:${txHash}`（防跨合约/重放歧义）
-  eventId: number // MessageSent 事件 id（全局递增）
-  from: string // 小写地址
-  to: string // 小写地址
-  content: string // 密文信封 JSON（BoxEnvelope）
-  plain: string | null // 明文缓存（inbox 解密后 / outbox 发送时）
-  at: number // 链上块时间戳（ms）
-  txHash: string
-  read: boolean // inbox 已读标记
-  sentByMe: boolean
-  chainId?: number // R04：链维度（当前 870；老记录缺失按 870 补）
-  blockNumber?: number // R04：所在块（重组排查/审计用）
-  blockHash?: string | null // R04：所在块哈希（checkpoint 核对用）
-  decryptStatus?: 'ok' | 'locked' | 'failed' // R03：老记录缺失按 plain 推导
-  decryptError?: string | null // R03：失败原因（UI 展示/排查）
-}
-
-/** Fill defaults for legacy records (schemaless upgrade: no data migration, normalize on read) */
-export function normalizeMessage(m: MessageRecord): MessageRecord {
-  return {
-    ...m,
-    chainId: m.chainId ?? 870,
-    blockNumber: m.blockNumber ?? 0,
-    blockHash: m.blockHash ?? null,
-    decryptStatus: m.decryptStatus ?? (m.plain != null ? 'ok' : 'locked'),
-    decryptError: m.decryptError ?? null,
-  }
-}
-
-/** Idempotent merge (R03/R04): keeps existing non-empty plain and read=true;
- * decrypt status takes the better of the two (ok > failed > locked) — log
- * replays / concurrent scans never wipe plaintext or reset read state */
-export function mergeMessage(existing: MessageRecord | undefined, next: MessageRecord): MessageRecord {
-  if (!existing) return normalizeMessage(next)
-  const rank = { ok: 3, failed: 2, locked: 1 } as const
-  const ex = normalizeMessage(existing)
-  const nx = normalizeMessage(next)
-  const status = rank[nx.decryptStatus!] >= rank[ex.decryptStatus!] ? nx.decryptStatus : ex.decryptStatus
-  return {
-    ...nx,
-    plain: nx.plain ?? ex.plain ?? null,
-    read: nx.read || ex.read,
-    decryptStatus: status,
-    decryptError: status === 'failed' ? (nx.decryptError ?? ex.decryptError ?? null) : null,
-    blockNumber: nx.blockNumber || ex.blockNumber,
-    blockHash: nx.blockHash ?? ex.blockHash,
-  }
-}
-
-// kv 杂项（getLogs 游标等）
-export interface MetaRecord {
-  key: string
-  value: unknown
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null
@@ -175,7 +117,8 @@ function openDb(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise
   dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
-    // R08: an upgrade blocked by an old connection in another tab fails explicitly (no hang forever); this connection yields and closes on versionchange
+    // R08: an upgrade blocked by an old connection in another tab fails
+    // explicitly (no hang forever); this connection yields on versionchange
     req.onblocked = () => reject(new Error('indexedDB upgrade blocked by another tab — close other tabs of this app and retry'))
     req.onupgradeneeded = () => {
       const db = req.result
@@ -189,7 +132,8 @@ function openDb(): Promise<IDBDatabase> {
     }
     req.onsuccess = () => {
       const db = req.result
-      // close this connection when another tab requests an upgrade, so its onblocked never hangs
+      // close this connection when another tab requests an upgrade, so its
+      // onblocked never hangs
       db.onversionchange = () => {
         db.close()
         dbPromise = null
@@ -239,8 +183,8 @@ export const deleteManifest = (rootCid: string): Promise<void> =>
 
 // ---- tasks ----
 
-// tasks store 现在混存 archive-watch 与 publish 两类记录（id 前缀隔离）——
-// 列表读取按 kind 过滤，各自的消费者拿各自的形状
+// The tasks store now holds both archive-watch and publish records (id-prefix
+// isolated) — list reads filter by kind so each consumer gets its own shape
 export const listTasks = (): Promise<TaskRecord[]> =>
   tx<unknown[]>(TASKS, 'readonly', (s) => s.getAll() as IDBRequest<unknown[]>).then((all) =>
     all.filter((t): t is TaskRecord => (t as { kind?: string }).kind === 'archive-watch'),
@@ -252,7 +196,7 @@ export const putTask = (task: TaskRecord): Promise<void> =>
 export const deleteTask = (id: string): Promise<void> =>
   tx(TASKS, 'readwrite', (s) => s.delete(id)).then(() => undefined)
 
-// ---- 发布任务（doc/13 R02；与 archive-watch 共用 tasks store，'publish:' 前缀隔离）----
+// ---- publish tasks (design review R02; shares the tasks store, 'publish:' id prefix) ----
 
 export const listPublishTasks = (): Promise<PublishTaskRecord[]> =>
   tx<unknown[]>(TASKS, 'readonly', (s) => s.getAll() as IDBRequest<unknown[]>).then((all) =>
@@ -265,7 +209,7 @@ export const putPublishTask = (task: PublishTaskRecord): Promise<void> =>
 export const deletePublishTask = (id: string): Promise<void> =>
   tx(TASKS, 'readwrite', (s) => s.delete(id)).then(() => undefined)
 
-// ---- registry 映射（P2）----
+// ---- registry mapping ----
 
 export const listRegistryRecords = (): Promise<RegistryRecord[]> =>
   tx<RegistryRecord[]>(REGISTRY, 'readonly', (s) => s.getAll() as IDBRequest<RegistryRecord[]>)
@@ -276,7 +220,7 @@ export const putRegistryRecord = (record: RegistryRecord): Promise<void> =>
 export const getRegistryRecord = (rootCid: string): Promise<RegistryRecord | undefined> =>
   tx<RegistryRecord | undefined>(REGISTRY, 'readonly', (s) => s.get(rootCid) as IDBRequest<RegistryRecord | undefined>)
 
-// ---- notes（P3）----
+// ---- notes ----
 
 export const listNotes = (): Promise<NoteRecord[]> => tx<NoteRecord[]>(NOTES, 'readonly', (s) => s.getAll() as IDBRequest<NoteRecord[]>)
 
@@ -287,7 +231,7 @@ export const putNote = (note: NoteRecord): Promise<void> => tx(NOTES, 'readwrite
 
 export const deleteNote = (id: string): Promise<void> => tx(NOTES, 'readwrite', (s) => s.delete(id)).then(() => undefined)
 
-// ---- vaults（P3）----
+// ---- vaults ----
 
 export const listVaults = (): Promise<VaultRecord[]> => tx<VaultRecord[]>(VAULTS, 'readonly', (s) => s.getAll() as IDBRequest<VaultRecord[]>)
 
@@ -300,12 +244,76 @@ export const putVault = (vault: VaultRecord): Promise<void> =>
 export const deleteVault = (address: string): Promise<void> =>
   tx(VAULTS, 'readwrite', (s) => s.delete(address.toLowerCase())).then(() => undefined)
 
-// ---- messages（P4）----
+// ---- messages (P4; R03/R04 extensions) ----
+
+// A message's local record. Inbox records cache the decrypted plaintext
+// (plain); outbox (sentByMe) plaintext exists only on the sending machine.
+// R03: sync (pull on-chain ciphertext) and decryption are separated —
+// decryptStatus tracks each message; failures are retryable singly or in bulk
+// (the cursor means "logs persisted", not "decrypted").
+// R04: chainId/blockNumber/blockHash recorded (cursor isolated by
+// chainId+contract+account).
+export interface MessageRecord {
+  id: string // composite key `${contract}:${eventId}:${txHash}`
+  eventId: number // MessageSent event id (globally increasing)
+  from: string // lowercase address
+  to: string // lowercase address
+  content: string // ciphertext envelope JSON (BoxEnvelope)
+  plain: string | null // plaintext cache (inbox after decrypt / outbox at send time)
+  at: number // on-chain block timestamp (ms)
+  txHash: string
+  read: boolean // inbox read marker
+  sentByMe: boolean
+  chainId?: number // R04: chain dimension (870 today; missing on legacy records)
+  blockNumber?: number // R04: inclusion block (reorg audit)
+  blockHash?: string | null // R04: inclusion block hash (checkpoint check)
+  decryptStatus?: 'ok' | 'locked' | 'failed' // R03: derived from plain on legacy records
+  decryptError?: string | null // R03: failure reason (UI display/debug)
+}
+
+/** Fill defaults for legacy records (schemaless upgrade: no data migration, normalize on read) */
+export function normalizeMessage(m: MessageRecord): MessageRecord {
+  return {
+    ...m,
+    chainId: m.chainId ?? 870,
+    blockNumber: m.blockNumber ?? 0,
+    blockHash: m.blockHash ?? null,
+    decryptStatus: m.decryptStatus ?? (m.plain != null ? 'ok' : 'locked'),
+    decryptError: m.decryptError ?? null,
+  }
+}
+
+/** Idempotent merge (R03/R04): keeps existing non-empty plain and read=true;
+ * decrypt status takes the better of the two (ok > failed > locked) — log
+ * replays / concurrent scans never wipe plaintext or reset read state */
+export function mergeMessage(existing: MessageRecord | undefined, next: MessageRecord): MessageRecord {
+  if (!existing) return normalizeMessage(next)
+  const rank = { ok: 3, failed: 2, locked: 1 } as const
+  const ex = normalizeMessage(existing)
+  const nx = normalizeMessage(next)
+  const status = rank[nx.decryptStatus!] >= rank[ex.decryptStatus!] ? nx.decryptStatus : ex.decryptStatus
+  return {
+    ...nx,
+    plain: nx.plain ?? ex.plain ?? null,
+    read: nx.read || ex.read,
+    decryptStatus: status,
+    decryptError: status === 'failed' ? (nx.decryptError ?? ex.decryptError ?? null) : null,
+    blockNumber: nx.blockNumber || ex.blockNumber,
+    blockHash: nx.blockHash ?? ex.blockHash,
+  }
+}
+
+// kv misc (the getLogs cursor etc.)
+export interface MetaRecord {
+  key: string
+  value: unknown
+}
 
 export const listMessages = (): Promise<MessageRecord[]> =>
   tx<MessageRecord[]>(MESSAGES, 'readonly', (s) => s.getAll() as IDBRequest<MessageRecord[]>).then((all) => all.map(normalizeMessage))
 
-// R03/R08: read-merge-write atomically in one transaction (replays/concurrent scans preserve plaintext and read state)
+// R03/R08: read-merge-write atomically in one transaction (replays/concurrent
+// scans preserve plaintext and read state)
 export const putMessage = (message: MessageRecord): Promise<void> =>
   openDb().then(
     (db) =>
@@ -322,7 +330,8 @@ export const putMessage = (message: MessageRecord): Promise<void> =>
       }),
   )
 
-// R08: the message batch and cursor commit in one transaction — a failed batch never advances the cursor
+// R08: the message batch and cursor commit in one transaction — a failed batch
+// never advances the cursor
 export const putMessagesWithCursor = (messages: MessageRecord[], cursorKey: string, cursorValue: unknown): Promise<void> =>
   openDb().then(
     (db) =>
@@ -342,7 +351,8 @@ export const putMessagesWithCursor = (messages: MessageRecord[], cursorKey: stri
       }),
   )
 
-// Read flag (R08: read-modify-write in one transaction, closing the lost-update window against concurrent putMessage)
+// read flag (R08: read-modify-write in one transaction, closing the lost-update
+// window against concurrent putMessage)
 export const markMessageRead = (id: string): Promise<void> =>
   openDb().then(
     (db) =>
@@ -381,7 +391,13 @@ export const putMessageDecryptResult = (id: string, plain: string | null, error:
       }),
   )
 
-// ---- meta（P4：kv 杂项）----
+// kv misc (the getLogs cursor etc.)
+export interface MetaRecord {
+  key: string
+  value: unknown
+}
+
+// ---- meta (P4: kv misc) ----
 
 export const getMeta = async <T>(key: string): Promise<T | undefined> => {
   const rec = await tx<MetaRecord | undefined>(META, 'readonly', (s) => s.get(key) as IDBRequest<MetaRecord | undefined>)
