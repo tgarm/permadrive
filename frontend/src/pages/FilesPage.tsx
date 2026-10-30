@@ -292,6 +292,12 @@ export function FilesPage() {
     try {
       const api = await connect()
       const result = await retrieveFile(api, manifest)
+      // R09: verify before saving — a failed integrity check blocks the save by
+      // default; a forensic export requires explicit confirmation
+      const exportUnverified = (bytes: Uint8Array, what: string): void => {
+        setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.integrityBlock', [what]) }))
+        if (window.confirm(t('files.exportUnverifiedConfirm'))) saveBlob(bytes, manifest.file.name, manifest.file.mimeType)
+      }
       if (manifest.encryption) {
         // v2 encrypted file: verify ciphertext integrity first (retrieve checks
         // cipherSha256/cipherSize), then decrypt and check the plaintext sha256
@@ -301,18 +307,20 @@ export function FilesPage() {
         const signMessage = evmSigner ? (msg: string) => signEvmMessage(evmSigner, msg) : null
         const plain = await decryptFileBytes(result.bytes, manifest.encryption, signMessage, openPassphrasePrompt)
         const plainSha = await sha256Hex(plain)
+        if (plainSha !== manifest.file.sha256 || plain.length !== manifest.file.size) {
+          exportUnverified(plain, `sha256 ${plainSha.slice(0, 16)}…`)
+          return
+        }
         saveBlob(plain, manifest.file.name, manifest.file.mimeType)
-        setRowBusy((b) => ({
-          ...b,
-          [manifest.rootCid]: plainSha === manifest.file.sha256 ? t('files.sha256Match', [plainSha.slice(0, 16)]) : t('files.sha256Mismatch', [plainSha]),
-        }))
+        setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.sha256Match', [plainSha.slice(0, 16)]) }))
+        return
+      }
+      if (!result.sha256Match || result.bytes.length !== manifest.file.size) {
+        exportUnverified(result.bytes, result.sha256Match ? 'length' : `sha256 ${result.sha256.slice(0, 16)}…`)
         return
       }
       saveBlob(result.bytes, manifest.file.name, manifest.file.mimeType)
-      setRowBusy((b) => ({
-        ...b,
-        [manifest.rootCid]: result.sha256Match ? t('files.sha256Match', [result.sha256.slice(0, 16)]) : t('files.sha256Mismatch', [result.sha256]),
-      }))
+      setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.sha256Match', [result.sha256.slice(0, 16)]) }))
     } catch (e) {
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: `✗ ${(e as Error).message}` }))
     }

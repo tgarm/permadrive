@@ -1,21 +1,15 @@
-// Paid downloads: one section component hosting the seller side (listing
-// management / pending authorisations / withdraw) and the buyer side (browse
-// someone's registry / purchase / my purchases / decrypt-download), mounted by
-// FilesPage. Delivery is semi-automatic: when the seller's app is online, the
-// pending authorisation row unwraps K (signature channel first, passphrase
-// dialog fallback), boxes it to the buyer's announced encryption pubkey, sends
-// the pdgrant message over the mailbox's E2E channel and calls markDelivered.
-// Digital-goods mode (buying = receiving the file, no DRM) and the escrow
-// refund rules are stated in the UI. Prices show as AI3, travel as wei; state
-// chips are stable identifiers with copy from the dictionary.
+// 付费下载（P4 批次 C，doc/12 §五；v2 订单模型 doc/13 R01/R06）：卖家侧
+//（上架/待处理授权/提款）与买家侧（查看他人目录/购买/我的购买/解密下载）
+// 一体的区块组件，由 FilesPage 挂载。交付半自动：卖家应用在线时从「待处理
+// 授权」点交付 —— 解出 K（签名通道优先，失败回落口令弹窗回调）→ pdgrant 私信
+//（骑 Mailbox E2E 通道）→ markDelivered。数字商品模式（购买=获得文件，无
+// DRM）、托管退款规则在 UI 明示。价格以 AI3 计价展示、wei 上链；状态 chip 是
+// 稳定标识（DEAL_STATE），文案走字典。
 //
-// Dual instances: once paywallV2Address is configured it becomes the active
-// instance — new listings/purchases/deliveries go through v2 (order snapshots:
-// reprice/delist never affect escrowed orders; a seller namespace cannot be
-// overwritten); v1 is frozen read-only and keeps refund/confirm/withdraw for
-// existing orders (while v2 is unconfigured everything uses v1, the current
-// behavior). Orders render from the normalised OrderRow (seller/state
-// included, never derived from the current listing).
+// 双实例（doc/13 R01 部署处置）：paywallV2Address 配置后为活跃实例 —— 新上架/
+// 购买/交付走 v2（订单快照：改价/下架不影响存量订单、卖家命名空间不可覆盖）；
+// v1 冻结只读，存量订单仅保留退款/确认/提现（v2 未配置时全部走 v1，现行为）。
+// 订单展示统一用 OrderRow（含卖家/状态，不再通过当前 listing 反推）。
 
 import { useCallback, useEffect, useState } from 'react'
 import { useChain } from '../chain-context'
@@ -37,6 +31,7 @@ import {
   getListingPriceV2,
   isPdGrant,
   paywallV2Active,
+  paywallV2Address,
   purchase,
   purchaseV2,
   refundByKey,
@@ -48,6 +43,7 @@ import {
   withdrawCredits,
   withdrawCreditsV2,
   type OrderRow,
+  type PdGrant,
 } from '../lib/paywall'
 import { fetchEntries, type RegistryEntry } from '../lib/registry'
 import { getManifest, listMessages, listRegistryRecords } from '../lib/store'
@@ -62,7 +58,7 @@ const short = (a: string): string => (a ? `${a.slice(0, 8)}…${a.slice(-6)}` : 
 
 interface ViewRow {
   entry: RegistryEntry
-  price: bigint | null // listing price under the active instance; null = not listed
+  price: bigint | null // 当前活跃实例口径下的上架价；null = 未上架
   seller: string
 }
 
@@ -76,9 +72,9 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
   const [listings, setListings] = useState<Map<string, { price: bigint; seller: string } | null>>(new Map())
   const [pending, setPending] = useState<OrderRow[]>([])
   const [purchases, setPurchases] = useState<OrderRow[]>([])
-  const [credits, setCredits] = useState<bigint | null>(null) // active instance
-  const [creditsLegacy, setCreditsLegacy] = useState<bigint | null>(null) // v1 withdrawals while v2 is active
-  const [priceEntry, setPriceEntry] = useState('') // selected manifestCid (listing form)
+  const [credits, setCredits] = useState<bigint | null>(null) // 活跃实例
+  const [creditsLegacy, setCreditsLegacy] = useState<bigint | null>(null) // v2 活跃时 v1 存量提现入口
+  const [priceEntry, setPriceEntry] = useState('') // 选中的 manifestCid（上架表单）
   const [priceValue, setPriceValue] = useState('')
   const [viewAddr, setViewAddr] = useState('')
   const [viewRows, setViewRows] = useState<ViewRow[] | null>(null)
@@ -102,11 +98,9 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
       }
     }
     setListings(map)
-    // pending authorisations come from the active instance only (v1 is frozen;
-    // its legacy Escrowed orders remain deliverable through the merge below)
+    // 待处理授权只来自活跃实例（v1 冻结后不再有新单；存量 Escrowed 仍可交付）
     setPending(v2 ? await fetchPendingGrantsV2(evm.address) : await fetchPendingGrants(evm.address))
-    // my purchases: while v2 is active, merge both instances (v1 orders keep
-    // refund/confirm/download)
+    // 我的购买：v2 活跃时合并两个实例（v1 存量订单的退款/确认/下载仍可用）
     const legacyRows = await fetchMyPurchases(evm.address)
     setPurchases(v2 ? [...(await fetchMyPurchasesV2(evm.address)), ...legacyRows] : legacyRows)
     setCredits(v2 ? await getCreditsV2(evm.address) : await getCredits(evm.address))
@@ -117,7 +111,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
     void reload().catch((e) => say(t('errors.registryTxFailed', ['read', (e as Error).message])))
   }, [reload])
 
-  // ---- seller ----
+  // ---- 卖家 ----
 
   const listNow = async () => {
     if (!evm || !priceEntry || !priceValue) return
@@ -158,8 +152,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
     setBusy(true)
     try {
       say(t('paywall.delivering', [short(pv.buyer)]))
-      // manifest from local storage first (the seller's own files are usually in
-      // the library), otherwise recover via the registry height hint
+      // manifest 优先本地（卖家自己的文件通常在库），否则凭 Registry height 还原
       const rec = (await listRegistryRecords()).find((r) => r.manifestCid === pv.entry!.manifestCid)
       let manifest = rec ? await getManifest(rec.rootCid) : undefined
       const api = await connect()
@@ -193,7 +186,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
     }
   }
 
-  // ---- buyer ----
+  // ---- 买家 ----
 
   const viewDirectory = async () => {
     if (!viewAddr.trim()) return
@@ -234,13 +227,38 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
     }
   }
 
-  const findGrant = async (manifestCid: string | null) => {
-    if (!manifestCid) return null
+  // R05: grant messages are bound to the order — only v2 grants "addressed to
+  // me, from the order's seller, matching paywall/orderId" qualify; legacy
+  // orders check the sender when the seller is known. Candidates are tried one
+  // by one with failures isolated, so a forged/wrong message cannot shadow the
+  // correct delivery.
+  const findGrant = async (pv: OrderRow): Promise<Uint8Array | null> => {
+    const manifestCid = pv.entry?.manifestCid ?? null
+    if (!manifestCid || !evm) return null
+    const me = evm.address.toLowerCase()
     const msgs = await listMessages()
+    const candidates: PdGrant[] = []
     for (const m of msgs) {
       if (!m.plain) continue
-      const grant = isPdGrant(m.plain)
-      if (grant && grant.manifestCid === manifestCid) return grant
+      if (m.to && m.to.toLowerCase() !== me) continue
+      const g = isPdGrant(m.plain)
+      if (!g || g.manifestCid !== manifestCid) continue
+      if (pv.contract === 'v2' && g.v === 2) {
+        if (g.orderId !== pv.orderId?.toString()) continue
+        if (g.paywall?.toLowerCase() !== paywallV2Address()?.toLowerCase()) continue
+        if (g.seller && pv.seller && g.seller.toLowerCase() !== pv.seller.toLowerCase()) continue
+        if (pv.seller && m.from.toLowerCase() !== pv.seller.toLowerCase()) continue
+      } else if (pv.seller && m.from && m.from.toLowerCase() !== pv.seller.toLowerCase()) {
+        continue
+      }
+      candidates.push(g)
+    }
+    for (const g of candidates) {
+      try {
+        return await unwrapDeliveredKey(evm, g)
+      } catch {
+        // 错误候选隔离：换下一个
+      }
     }
     return null
   }
@@ -249,12 +267,9 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
     if (!evm || !pv.entry) return
     setBusy(true)
     try {
-      const grant = await findGrant(pv.entry.manifestCid)
-      let keyBytes: Uint8Array | null = null
-      if (grant) keyBytes = await unwrapDeliveredKey(evm, grant)
+      let keyBytes: Uint8Array | null = await findGrant(pv)
       if (!keyBytes) {
-        // pdgrant not arrived yet (self-trade skips the channel, or the seller's
-        // app has not responded) — if this device already holds the file, unwrap K directly
+        // pdgrant 未到（自卖自买不经信道，或卖家尚未响应）—— 本机已有该文件则直接解 K
         const rec = (await listRegistryRecords()).find((r) => r.manifestCid === pv.entry!.manifestCid)
         const localManifest = rec ? await getManifest(rec.rootCid) : undefined
         if (localManifest?.encryption) keyBytes = await unwrapManifestKey(evm, localManifest, getPassphrase)
@@ -273,8 +288,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
       if (plainSha !== manifest.file.sha256) throw new Error(t('files.sha256Mismatch', [plainSha]))
       saveBlob(plain, manifest.file.name, manifest.file.mimeType)
       say(t('paywall.purchasedDecrypted', [manifest.file.name, plainSha.slice(0, 16)]))
-      // decrypt success implies receipt confirmation (pays the seller); on
-      // failure refund stays available within the grace period
+      // 解密成功即确认收货（放款卖家）；失败可走 refund（宽限期内）
       if (pv.contract === 'v2') await confirmReceiptV2(evm, pv.orderId!)
       else await confirmReceipt(evm, pv.entry.manifestCid)
       await reload()
@@ -290,7 +304,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
     setBusy(true)
     try {
       if (pv.contract === 'v2') await confirmReceiptV2(evm, pv.orderId!)
-      else await confirmReceiptByKey(evm, pv.key as `0x${string}`) // legacy: only the key is available when entry is missing
+      else await confirmReceiptByKey(evm, pv.key as `0x${string}`) // legacy：entry 缺失时只有 key 可用
       say(t('paywall.confirmedOk'))
       await reload()
     } catch (e) {
@@ -338,7 +352,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
 
       {evm && (
         <div className="paywall-grid">
-          {/* seller */}
+          {/* 卖家 */}
           <div className="pw-col">
             <h3>{t('paywall.myListings')}</h3>
             <div className="msg-compose">
@@ -407,7 +421,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
             )}
           </div>
 
-          {/* buyer */}
+          {/* 买家 */}
           <div className="pw-col">
             <h3>{t('paywall.viewDirectory')}</h3>
             <div className="kv">

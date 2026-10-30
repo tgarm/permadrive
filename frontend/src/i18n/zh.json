@@ -152,7 +152,9 @@
     "cipherIntegrityFail": "密文完整性校验失败——链上数据与 manifest 不符",
     "passphrasePromptTitle": "需要口令",
     "passphrasePromptBody": "钱包签名无法解出文件密钥（钱包不同或签名不可复现）。请输入上传时设置的口令。",
-    "passphraseOk": "解密"
+    "passphraseOk": "解密",
+    "integrityBlock": "⚠ Integrity check failed ({0}) — nothing saved",
+    "exportUnverifiedConfirm": "The file does not match its manifest: it may be corrupted or the manifest is wrong. Nothing is saved by default. Export an UNVERIFIED copy for forensics?"
   },
   "notes": {
     "title": "笔记",

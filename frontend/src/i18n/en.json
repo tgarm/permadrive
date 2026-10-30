@@ -152,7 +152,9 @@
     "cipherIntegrityFail": "Ciphertext integrity check failed — on-chain data does not match the manifest",
     "passphrasePromptTitle": "Passphrase required",
     "passphrasePromptBody": "The wallet signature could not unwrap the file key (different wallet or non-reproducible signature). Enter the passphrase set at upload time.",
-    "passphraseOk": "Decrypt"
+    "passphraseOk": "Decrypt",
+    "integrityBlock": "⚠ Integrity check failed ({0}) — nothing saved",
+    "exportUnverifiedConfirm": "The file does not match its manifest: it may be corrupted or the manifest is wrong. Nothing is saved by default. Export an UNVERIFIED copy for forensics?"
   },
   "notes": {
     "title": "Notes",
