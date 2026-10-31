@@ -1,9 +1,9 @@
 // Direct-sales section (phase-one UI): seller (list / reprice = new revision /
 // deliver pending orders) + buyer (browse a directory / pay directly /
 // decrypt-download / rate up or down). Payment splits instantly, no platform
-// refunds, no escrow, no withdrawal — mounted on FilesPage alongside
-// PaywallSection (escrow existing-order disposition), rendered only once
-// config.salesAddress is configured. Delivery is semi-automatic: with the
+// refunds, no escrow, no withdrawal — mounted on FilesPage, rendered only once
+// config.salesAddress is configured (the paid-download escrow frontend was
+// removed entirely on 2026-10-31). Delivery is semi-automatic: with the
 // seller's app online they click Deliver on a pending order — unwrap K →
 // pdgrant v3 private message (over the Mailbox E2E channel) → markKeySent
 // (optional registration; never blocks the buyer's download). Ratings need no
@@ -30,7 +30,7 @@ import { formatAi3, formatBytes } from '../lib/bytes'
 import { autoEvmChain } from '../lib/evm'
 import { ChainTag } from '../components/ChainTag'
 import { decryptMessage, encryptionPublicKeyFor, getAnnouncedKey, mailboxAddress, syncMessages } from '../lib/mailbox'
-import { unwrapManifestKey } from '../lib/paywall'
+import { unwrapManifestKey } from '../lib/keyUnwrap'
 import {
   deliverKeySales,
   delistSales,
@@ -219,7 +219,7 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
       // key the seller cannot encrypt the delivery
       const announced = await getAnnouncedKey(evm.address)
       if (!announced) {
-        say(t('paywall.enableReceivingFirst'))
+        say(t('sales.enableReceivingFirst'))
         return
       }
       // fresh quote (the price in viewRows may be stale after a reprice/revision swap)
@@ -355,7 +355,7 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
   }
 
   const finishDownload = async (manifest: Awaited<ReturnType<typeof recoverManifestFromHint>>, keyBytes: Uint8Array) => {
-    if (!manifest.encryption) throw new Error(t('errors.paywallNotEncrypted'))
+    if (!manifest.encryption) throw new Error(t('errors.manifestNotEncrypted'))
     say(t('sales.decryptingPurchased'))
     const result = await retrieveFile(await connect(), manifest)
     if (!result.sha256Match) throw new Error(t('files.cipherIntegrityFail'))
@@ -422,9 +422,9 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
       {!evm && <div className="notice">{t('sales.connectFirst')}</div>}
 
       {evm && (
-        <div className="paywall-grid">
+        <div className="sales-grid">
           {/* seller */}
-          <div className="pw-col">
+          <div className="sales-col">
             <h3>{t('sales.myListings')}</h3>
             <div className="msg-compose">
               <div className="kv">
@@ -510,7 +510,7 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
           </div>
 
           {/* buyer */}
-          <div className="pw-col">
+          <div className="sales-col">
             <h3>{t('sales.viewDirectory')}</h3>
             <div className="kv">
               <span>{t('sales.addressLabel')}</span>

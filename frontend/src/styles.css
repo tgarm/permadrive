@@ -598,7 +598,7 @@ textarea:focus {
   }
 }
 
-.pw-cell {
+.cell-flex {
   display: flex;
   gap: 8px;
   align-items: center;
@@ -825,32 +825,32 @@ textarea:focus {
   display: inline-block;
 }
 
-/* Paid downloads, two columns */
-.paywall-grid {
+/* Direct sales, two columns (layout carried over from the retired paid-download section) */
+.sales-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 18px;
 }
 
 @media (max-width: 860px) {
-  .paywall-grid {
+  .sales-grid {
     grid-template-columns: 1fr;
   }
 }
 
-.pw-col {
+.sales-col {
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
 }
 
-.pw-col h3 {
+.sales-col h3 {
   margin: 8px 0 0;
   font-size: 13px;
 }
 
-.pw-col select {
+.sales-col select {
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 8px;

@@ -621,7 +621,7 @@ export function VaultPage() {
                       {entry.notes && <div className="small-text muted">{entry.notes}</div>}
                     </td>
                     <td>
-                      <div className="pw-cell">
+                      <div className="cell-flex">
                         <span className="mono small-text">{entry.username || '—'}</span>
                         {entry.username && (
                           <button className="btn link" onClick={() => copy(entry.username, `${entry.id}:u`)}>
@@ -631,7 +631,7 @@ export function VaultPage() {
                       </div>
                     </td>
                     <td>
-                      <div className="pw-cell">
+                      <div className="cell-flex">
                         <span className="mono small-text">{revealed.has(entry.id) ? entry.password : '••••••••'}</span>
                         <button className="btn link" onClick={() => setRevealed(new Set([...revealed, entry.id]))}>
                           {revealed.has(entry.id) ? '' : t('vault.show')}

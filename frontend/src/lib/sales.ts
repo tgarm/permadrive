@@ -1,8 +1,7 @@
 // Direct sales: pay-and-split, no escrow, no refunds, positive/negative
-// ratings. Runs in parallel with paywall.ts (the escrow model: v1 frozen /
-// v2 deployment paused): once config.salesAddress is set, SalesSection mounts
-// and the escrow section keeps only existing-order disposition. Contract
-// essentials:
+// ratings. SalesSection mounts on FilesPage once config.salesAddress is set
+// (the paid-download escrow frontend was removed entirely on 2026-10-31, see
+// docs — the v1/v2 contracts stay on-chain as history). Contract essentials:
 //  - listingId = keccak256(seller, fileKey), fileKey = keccak256(manifestCid)
 //    (same derivation as Registry v2 / Paywall); immutable revisions, purchase
 //    must name expectedRevision (the current revision) plus maxPrice/
@@ -25,7 +24,7 @@ import { accountOf, fetchEntries, registryPublicClient, walletClientFor, type Re
 import { autoEvmChain } from './evm.ts'
 import { boxDecryptWithSecretKey, boxEncrypt, injectedDecrypt, parseEnvelope as parseBoxEnvelope, publicKeyFromBase64 } from './boxCrypto.ts'
 import { getAnnouncedKey, localBoxSecretKey, sendEncryptedMessage } from './mailbox.ts'
-import { unwrapManifestKey } from './paywall.ts'
+import { unwrapManifestKey } from './keyUnwrap.ts'
 import type { Manifest } from './manifest.ts'
 import type { EvmSigner } from './wallet/types.ts'
 import { t } from '../i18n/core.ts'
@@ -196,7 +195,7 @@ export async function getVoteSales(seller: string, manifestCid: string, buyer: s
   return choice
 }
 
-// ---- purchase event scan (indexed buyer/seller filter + persistent incremental cursor, same pattern as paywall.ts) ----
+// ---- purchase event scan (indexed buyer/seller filter + persistent incremental cursor) ----
 
 const PURCHASED_SALES = parseAbiItem(
   'event Purchased(uint256 indexed orderId, address indexed buyer, address indexed seller, bytes32 listingId, uint256 revision, bytes32 fileKey, address provider, uint96 price, uint16 platformBps, uint16 providerBps)',
@@ -295,7 +294,7 @@ async function mergedStubs(role: 'buyer' | 'seller', filter: { buyer?: string; s
   return stubs
 }
 
-// seller → Registry entries cache (fileKey reverse lookup into the directory; same TTL policy as paywall.ts)
+// seller → Registry entries cache (fileKey reverse lookup into the directory; 60s TTL, failures are not cached)
 const ENTRY_TTL_MS = 60_000
 const entriesCache = new Map<string, { at: number; entries: Awaited<ReturnType<typeof fetchEntries>> }>()
 
@@ -360,9 +359,10 @@ export async function fetchSellerOrdersSales(seller: string): Promise<SalesOrder
 
 // ---- key delivery (rides the Mailbox message channel; pdgrant v3 binds the sales contract and the order) ----
 
-// The new grant names its version and the sales contract explicitly — bound to
-// chainId/sales/orderId/buyer/seller/provider/fileKey/manifestCid. v1/v2 (escrow)
-// keep parsing per paywall.ts.
+// The grant names its version and the sales contract explicitly — bound to
+// chainId/sales/orderId/buyer/seller/provider/fileKey/manifestCid. v3 is the
+// only parsed format (the old escrow grants v1/v2 went away with the
+// paid-download frontend removal).
 export interface PdGrantV3 {
   type: 'pdgrant'
   manifestCid: string
@@ -406,7 +406,7 @@ export async function deliverKeySales(
   getPassphrase: () => Promise<string | null>,
 ): Promise<{ messageTxHash: string; deliveredTxHash: string }> {
   assertSalesActive()
-  if (!manifest?.encryption) throw new Error(t('errors.paywallNotEncrypted'))
+  if (!manifest?.encryption) throw new Error(t('errors.manifestNotEncrypted'))
   // self-purchase (e2e/acceptance path): a pdgrant channel is pointless, only markKeySent
   if (buyer.toLowerCase() === signer.address.toLowerCase()) {
     const deliveredTxHash = await markKeySentSales(signer, orderId)
@@ -433,7 +433,7 @@ export async function deliverKeySales(
   return { messageTxHash: sent.txHash, deliveredTxHash }
 }
 
-/** Buyer unwraps K from a pdgrant v3 message plaintext (same derivation as paywall.unwrapDeliveredKey) */
+/** Buyer unwraps K from a pdgrant v3 message plaintext (local keys derive deterministically; injected wallets decrypt in-wallet) */
 export async function unwrapDeliveredKeySales(signer: EvmSigner, grant: PdGrantV3): Promise<Uint8Array> {
   if (signer.kind === 'local') {
     const secret = await localBoxSecretKey(signer)

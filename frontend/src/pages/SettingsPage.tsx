@@ -70,18 +70,6 @@ export function SettingsPage() {
         </label>
         <label className="field">
           <span>
-            <ChainTag chain="evm" /> {t('settings.paywallLabel')}
-          </span>
-          <input value={form.paywallAddress} onChange={(e) => setForm({ ...form, paywallAddress: e.target.value })} spellCheck={false} />
-        </label>
-        <label className="field">
-          <span>
-            <ChainTag chain="evm" /> {t('settings.paywallV2Label')}
-          </span>
-          <input value={form.paywallV2Address} onChange={(e) => setForm({ ...form, paywallV2Address: e.target.value })} spellCheck={false} />
-        </label>
-        <label className="field">
-          <span>
             <ChainTag chain="evm" /> {t('settings.salesLabel')}
           </span>
           <input value={form.salesAddress} onChange={(e) => setForm({ ...form, salesAddress: e.target.value })} spellCheck={false} />

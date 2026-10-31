@@ -60,7 +60,7 @@ export async function encryptionPublicKeyFor(signer: EvmSigner): Promise<string>
   return injectedEncryptionPublicKey(signer.provider!, signer.address)
 }
 
-/** Local-channel decryption secret key (unwraps paywall pdgrant inner envelopes; injected wallets decrypt in-wallet instead) */
+/** Local-channel decryption secret key (unwraps pdgrant inner envelopes; injected wallets decrypt in-wallet instead) */
 export async function localBoxSecretKey(signer: EvmSigner): Promise<Uint8Array> {
   if (signer.kind !== 'local' || !signer.account) throw new Error(t('errors.localNoAccount'))
   return (await localKeypairFor(signer)).secretKey
