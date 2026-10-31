@@ -51,9 +51,9 @@ export const DEFAULT_CONFIG: AppConfig = {
   // Paywall v2 (order-model redesign) — filled in by the deploy script / Settings after deployment
   paywallV2Address: '',
   paywallV2DeployBlock: 0,
-  // DirectSales (direct sales) — filled in by the deploy script / Settings after deployment
-  salesAddress: '',
-  salesDeployBlock: 0,
+  // DirectSales mainnet deployment (contracts/deployments.json auto-evm-mainnet-direct-sales, 2026-10-31)
+  salesAddress: '0x4321c47c84fd38c8bff8ca33cf0a0592f3a2ee9b',
+  salesDeployBlock: 5331816,
 }
 
 // A few dev/acceptance devices stored the v1 address as registryAddress back

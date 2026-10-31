@@ -17,5 +17,55 @@
     "feePerByte": "105245676421",
     "minFee": "10000000000000000",
     "deployedAt": "2026-10-26T11:29:15.059Z"
+  },
+  "auto-evm-mainnet-mailbox": {
+    "chainId": 870,
+    "address": "0x3446abe95edc17e4056a28d7c5fb10d579395200",
+    "txHash": "0xc2e60d62fbcbe3a6e85738504fb991aa528affda04098b2053babeb7f3064d34",
+    "blockNumber": "5311071",
+    "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "deployedAt": "2026-10-29T16:09:41.072Z"
+  },
+  "auto-evm-mainnet-paywall": {
+    "chainId": 870,
+    "address": "0xb51be7a5cc1a03fd51892d9db1fc942aa164405a",
+    "txHash": "0x5fa650bc16b6c6440183d8d1556ad716649c9d018178d2d79a428d62193f1842",
+    "blockNumber": "5314515",
+    "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "treasury": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "deliveryTimeout": "259200",
+    "gracePeriod": "259200",
+    "deployedAt": "2026-10-29T23:11:33.367Z"
+  },
+  "auto-evm-mainnet-paywall-test": {
+    "chainId": 870,
+    "address": "0x4db00db74769a0e8d38654bbe20144668c105acf",
+    "txHash": "0x8dabe55e314eae3c7350fbef6b3ee3f658d311eec103aa5a38526666c02c4760",
+    "blockNumber": "5314519",
+    "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "treasury": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "deliveryTimeout": "300",
+    "gracePeriod": "300",
+    "deployedAt": "2026-10-29T23:11:59.688Z"
+  },
+  "auto-evm-mainnet-direct-sales": {
+    "chainId": 870,
+    "address": "0x4321c47c84fd38c8bff8ca33cf0a0592f3a2ee9b",
+    "txHash": "0x96f54475606225c220290a1d6321c719756bcc1bb91897bb3e115b910e4013f6",
+    "blockNumber": "5331816",
+    "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "treasury": "0xed7Ef7d8fC96615797B4f5720aEd5FFb63B4412F",
+    "platformBps": 1000,
+    "deployedAt": "2026-10-31T10:41:45.758Z"
+  },
+  "auto-evm-mainnet-direct-sales-test": {
+    "chainId": 870,
+    "address": "0xe2fb274a3c82d6ef88ac22c3eba201b667f34ade",
+    "txHash": "0x78ef9b51b674d58e1bad894e7f7e6ab80f1e2121cf1589333a7b34fc1d98d574",
+    "blockNumber": "5331819",
+    "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "treasury": "0xed7Ef7d8fC96615797B4f5720aEd5FFb63B4412F",
+    "platformBps": 1000,
+    "deployedAt": "2026-10-31T10:42:16.508Z"
   }
 }
