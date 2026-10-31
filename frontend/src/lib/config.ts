@@ -18,12 +18,20 @@ export interface AppConfig {
   /** Mailbox deployment block (the getLogs scan start; baked in at deploy time) */
   mailboxDeployBlock: number
   /** DirectSales (direct sales: pay-and-split, no refunds, ratings).
-   *  Once set, FilesPage renders the SalesSection; empty (default) means
-   *  direct sales is unavailable. (The paid-download escrow frontend was
-   *  removed entirely on 2026-10-31; the v1/v2 contracts stay on-chain and in
-   *  deployments.json as history — there is no frontend entry anymore.) */
+   *  Once set, sharing is available (seller actions live in the per-file share
+   *  panel, buyer actions in the Share tab); empty means direct sales is
+   *  unavailable. (The paid-download escrow frontend was removed entirely on
+   *  2026-10-31; the v1/v2 contracts stay on-chain and in deployments.json as
+   *  history — there is no frontend entry anymore.) */
   salesAddress: string
   salesDeployBlock: number
+  /** PublicPublisher (public = 1 wei dust-price sale + a Published event that
+   *  makes the file key public). When empty, both the public entry and the
+   *  public log reads are disabled (for-sale actions via DirectSales are
+   *  unaffected). Reader trust domain: only events emitted by this address
+   *  are trusted; cursor keys include this address. */
+  publicPublisherAddress: string
+  publicPublisherDeployBlock: number
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -39,6 +47,11 @@ export const DEFAULT_CONFIG: AppConfig = {
   // DirectSales mainnet deployment (contracts/deployments.json auto-evm-mainnet-direct-sales, 2026-10-31)
   salesAddress: '0x4321c47c84fd38c8bff8ca33cf0a0592f3a2ee9b',
   salesDeployBlock: 5331816,
+  // PublicPublisher — empty by default: the public entry stays disabled until
+  // deployed; after deployment fill in the address and block from
+  // deployments.json (auto-evm-mainnet-public-publisher)
+  publicPublisherAddress: '',
+  publicPublisherDeployBlock: 0,
 }
 
 // A few dev/acceptance devices stored the v1 address as registryAddress back
@@ -65,6 +78,10 @@ export function loadConfig(): AppConfig {
       mailboxDeployBlock: Number(parsed.mailboxDeployBlock) > 0 ? Number(parsed.mailboxDeployBlock) : DEFAULT_CONFIG.mailboxDeployBlock,
       salesAddress: typeof parsed.salesAddress === 'string' ? parsed.salesAddress : DEFAULT_CONFIG.salesAddress,
       salesDeployBlock: Number(parsed.salesDeployBlock) > 0 ? Number(parsed.salesDeployBlock) : DEFAULT_CONFIG.salesDeployBlock,
+      publicPublisherAddress:
+        typeof parsed.publicPublisherAddress === 'string' ? parsed.publicPublisherAddress : DEFAULT_CONFIG.publicPublisherAddress,
+      publicPublisherDeployBlock:
+        Number(parsed.publicPublisherDeployBlock) > 0 ? Number(parsed.publicPublisherDeployBlock) : DEFAULT_CONFIG.publicPublisherDeployBlock,
     }
   } catch {
     return { ...DEFAULT_CONFIG }

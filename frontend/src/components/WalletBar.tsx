@@ -19,18 +19,9 @@ import { attachEvmWalletEvents, connectEvmWallet, discoverEvmWallets, type Disco
 import { AUTO_EVM_CHAIN_ID } from '../lib/evm'
 import { t } from '../i18n'
 
-// Signer labels are stable identifiers written by the lib layer; they map to
-// display names in the current locale here. Extension wallet names (Talisman
-// etc.) are proper nouns and render as-is.
-function signerName(label: string): string {
-  if (label === 'local') return t('wallet.labelLocal')
-  if (label === 'injected') return t('wallet.labelInjected')
-  return label
-}
-
 export function WalletBar() {
   const wallet = useWallet()
-  const { active, setActive, evm, setEvm } = useSigner()
+  const { setActive, evm, setEvm } = useSigner()
   const [mode, setMode] = useState<'extension' | 'local' | null>(null)
   const [localSigner, setLocalSigner] = useState<Awaited<ReturnType<typeof createLocalSigner>> | null>(null)
   const [mnemonic, setMnemonic] = useState('')
@@ -39,12 +30,6 @@ export function WalletBar() {
   const [evmError, setEvmError] = useState<string | null>(null)
   const [devEvm, setDevEvm] = useState<'none' | 'local' | 'injected'>('none')
   const [evmWallets, setEvmWallets] = useState<DiscoveredEvmWallet[] | null>(null)
-
-  // Display name for the active-signer strip: an extension wallet's label is
-  // its extensionName (e.g. "talisman") — show the title (e.g. "Talisman"),
-  // matching the connect buttons; fall back to signerName when not found
-  const substrateName = (label: string): string =>
-    wallet.availableWallets.find((w) => w.extensionName === label)?.title ?? signerName(label)
 
   // EVM wallet discovery (EIP-6963 + legacy fallback): once on mount and again
   // after a disconnect (covers wallets that become ready after page load and
@@ -148,10 +133,10 @@ export function WalletBar() {
   return (
     <div className="wallet-bar">
       <div className="wallet-section">
-        {/* chain color rule: consensus = teal, EVM = violet — the two wallet
-            columns are distinguishable at a glance */}
+        {/* chain color rule: consensus = teal, EVM = violet — the ChainTag is
+            the title (chain names directly; the redundant bottom strip is gone) */}
         <div className="wallet-section-title">
-          <ChainTag chain="consensus" /> {t('wallet.substrateTitle')}
+          <ChainTag chain="consensus" /> {t('wallet.chainConsensus')}
         </div>
         {!wallet.isConnected ? (
           wallet.availableWallets.length === 0 ? (
@@ -191,7 +176,7 @@ export function WalletBar() {
 
       <div className="wallet-section">
         <div className="wallet-section-title">
-          <ChainTag chain="evm" /> {t('wallet.registryTitle')}
+          <ChainTag chain="evm" /> {t('wallet.chainEvm')}
         </div>
         {evm ? (
           <div className="wallet-connected">
@@ -230,6 +215,10 @@ export function WalletBar() {
       {showDev && (
         <div className="wallet-section dev">
           <div className="wallet-section-title">{t('wallet.devTitle')}</div>
+          {/* same-mnemonic note: the two addresses derive from one mnemonic on
+              the two chains (with extension wallets the two accounts are
+              independent) */}
+          <p className="muted small-text">{t('wallet.devSameMnemonic')}</p>
           {localSigner ? (
             <div className="wallet-connected">
               <span className="mono">
@@ -269,17 +258,6 @@ export function WalletBar() {
         </div>
       )}
 
-      <div className={`active-signer ${active || evm ? 'on' : ''}`}>
-        {!active && !evm
-          ? t('wallet.noSigner')
-          : (
-            <>
-              {active && <span className="txt-consensus">{t('wallet.substrateLabel', [substrateName(active.label), active.address.slice(0, 10) + '…'])}</span>}
-              {active && evm && ' ｜ '}
-              {evm && <span className="txt-evm">{t('wallet.evmLabel', [signerName(evm.label), evm.address.slice(0, 8) + '…'])}</span>}
-            </>
-          )}
-      </div>
     </div>
   )
 }

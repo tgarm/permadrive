@@ -11,8 +11,10 @@
 // The upload card / file table / passphrase dialog / pending-publish notice
 // are separate components (UploadCard / FilesTable / PassphrasePrompt /
 // PendingPublishNotice); this file keeps the state shared across sections.
-// Direct sales (mounted at the bottom of the page); the paid-download escrow
-// frontend was removed entirely on 2026-10-31.
+// Sharing: each file row carries a three-state badge and opens a per-file
+// share panel; the dissolved SalesSection moved seller actions into the panel
+// and buyer actions into the Share tab. The paid-download escrow frontend was
+// removed entirely on 2026-10-31.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useChain } from '../chain-context'
@@ -47,9 +49,10 @@ import { saveBlob } from '../lib/download'
 import { FilesTable } from './FilesTable'
 import { PassphrasePrompt } from './PassphrasePrompt'
 import { PendingPublishNotice } from './PendingPublishNotice'
-import { SalesSection } from './SalesSection'
+import { SharePanel } from './SharePanel'
 import { UploadCard } from './UploadCard'
-import { salesActive } from '../lib/sales'
+import { deriveShareInfo, type ShareInfo } from '../lib/shareState'
+import { putManifestPublishMeta } from '../lib/manifestPublish'
 import { nodeCount, useI18n } from '../i18n'
 
 type RowBusy = Record<string, string>
@@ -72,6 +75,9 @@ export function FilesPage() {
   // results — never auto-resend)
   const [pendingPublish, setPendingPublish] = useState<PublishTaskRecord[]>([])
   const [verifyingId, setVerifyingId] = useState<string | null>(null)
+  // three-state sharing: per-file on-chain derived badges + the share panel anchor
+  const [shareInfos, setShareInfos] = useState<Map<string, ShareInfo>>(new Map())
+  const [sharePanelRoot, setSharePanelRoot] = useState<string | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
   const watching = useRef(new Set<string>())
 
@@ -85,6 +91,26 @@ export function FilesPage() {
     setTasks(ts.filter((x) => x.kind === 'archive-watch')) // publish tasks are tracked by pendingPublish
     setRegistryRecords(rs)
   }, [])
+
+  // three-state share badges (derived on-chain: Published event / listing;
+  // failures render as unshared)
+  const refreshShare = useCallback(async () => {
+    const next = new Map<string, ShareInfo>()
+    for (const m of manifests) {
+      next.set(
+        m.rootCid,
+        await deriveShareInfo(m, {
+          owner: evmSigner?.address ?? null,
+          registryRecord: registryRecords.find((r) => r.rootCid === m.rootCid) ?? null,
+        }),
+      )
+    }
+    setShareInfos(next)
+  }, [manifests, registryRecords, evmSigner])
+
+  useEffect(() => {
+    void refreshShare()
+  }, [refreshShare])
 
   const verifyPending = async (record: PublishTaskRecord) => {
     setVerifyingId(record.id)
@@ -272,6 +298,13 @@ export function FilesPage() {
         setRowBusy((b) => ({ ...b, [manifest.rootCid]: detail ? `${text} ${detail}` : text }))
       })
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.manifestPublished', [publication.height]) }))
+      // share-panel meta sidecar: sharing stays usable even when the Registry
+      // registration fails
+      void putManifestPublishMeta(manifest.rootCid, {
+        manifestCid: publication.manifestCid,
+        height: publication.height,
+        txHash: publication.txHash,
+      })
       // dev fee = max(minFee, 10% of the storage-fee estimate); quoted before payment
       const fee = await quoteRegisterFee(manifest.file.size)
       const feeAi3 = (Number(fee) / 1e18).toFixed(4)
@@ -423,10 +456,13 @@ export function FilesPage() {
           rowBusy={rowBusy}
           syncedRootCids={syncedRootCids}
           syncing={syncing}
+          shareInfoByRoot={shareInfos}
+          sharePanelRoot={sharePanelRoot}
           onDownload={(m) => void download(m)}
           onExport={exportManifest}
           onSync={(m) => void syncToRegistry(m)}
           onDelete={(m) => void removeManifest(m)}
+          onShare={(m) => setSharePanelRoot((cur) => (cur === m.rootCid ? null : m.rootCid))}
         />
         <p className="privacy-note">
           {t('files.privacyRegistry')}
@@ -434,8 +470,26 @@ export function FilesPage() {
         </p>
       </section>
 
-      {/* direct sales: rendered once the DirectSales contract is configured; until then it takes no space */}
-      {salesActive() && <SalesSection getPassphrase={openPassphrasePrompt} />}
+      {/* per-file share panel: three-state actions (list/delist/make public/
+          copy link/deliver). SalesSection is dissolved — seller actions live
+          here, buyer actions live in the Share tab. */}
+      {sharePanelRoot &&
+        (() => {
+          const manifest = manifests.find((m) => m.rootCid === sharePanelRoot)
+          if (!manifest) return null
+          return (
+            <SharePanel
+              manifest={manifest}
+              registryRecord={registryRecords.find((r) => r.rootCid === sharePanelRoot) ?? null}
+              getPassphrase={openPassphrasePrompt}
+              onNotice={setNotice}
+              onChanged={() => {
+                void refresh()
+                void refreshShare()
+              }}
+            />
+          )
+        })()}
 
       {passPrompt && <PassphrasePrompt prompt={passPrompt} onResolve={(v) => { passPrompt.resolve(v); setPassPrompt(null) }} />}
     </div>

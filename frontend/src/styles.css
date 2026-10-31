@@ -858,3 +858,47 @@ textarea:focus {
   color: var(--text);
   max-width: 260px;
 }
+
+.share-badge {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.share-panel,
+.share-landing {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.share-panel .card-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.share-subhead {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.advanced-options summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.advanced-options[open] summary {
+  margin-bottom: 6px;
+}
+
+.advanced-options label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.advanced-options .warning {
+  margin: 6px 0 0;
+}

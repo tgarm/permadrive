@@ -57,7 +57,9 @@ export function UploadCard({
   const { active: activeSigner, evm: evmSigner } = useSigner()
   const [upload, setUpload] = useState<UploadSession | null>(null)
   const [dragOver, setDragOver] = useState(false)
-  const [encryptOn, setEncryptOn] = useState(false)
+  // Encrypted by default: sharing is a later action in the file panel, not an
+  // upload-time decision; plaintext is an explicit (advanced) choice
+  const [encryptOn, setEncryptOn] = useState(true)
   const [uploadPassphrase, setUploadPassphrase] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -178,12 +180,19 @@ export function UploadCard({
         <span className="muted">{t('files.dropHint', [formatBytes(MAX_UPLOAD_BYTES)])}</span>
       </div>
 
+      {/* Encrypted by default: plaintext is demoted to an advanced option —
+          opting out requires expanding "Advanced options" and seeing the
+          born-public warning */}
       <div className="encrypt-toggle-row">
-        <label>
-          <input type="checkbox" checked={encryptOn} onChange={(e) => setEncryptOn(e.target.checked)} />
-          <span>🔒 {t('files.encryptToggle')}</span>
-        </label>
-        <Hint>{t('files.encryptToggleHint')}</Hint>
+        <span className="muted">🔒 {t('files.encryptDefault')}</span>
+        <details className="advanced-options">
+          <summary>{t('files.advancedOptions')}</summary>
+          <label>
+            <input type="checkbox" checked={!encryptOn} onChange={(e) => setEncryptOn(!e.target.checked)} />
+            <span>🌐 {t('files.plaintextOptIn')}</span>
+          </label>
+          {!encryptOn && <p className="warning">{t('files.plainWarning')}</p>}
+        </details>
       </div>
 
       {upload && (
@@ -208,7 +217,7 @@ export function UploadCard({
                 </span>
                 <span>≈ {upload.fee.ai3.toFixed(4)} AI3</span>
               </div>
-              {upload.encrypt && (
+              {upload.encrypt ? (
                 <>
                   <div className="kv">
                     <span>{t('files.encryptionLabel')}</span>
@@ -224,9 +233,18 @@ export function UploadCard({
                     />
                   </div>
                 </>
+              ) : (
+                <div className="kv">
+                  <span>{t('files.encryptionLabel')}</span>
+                  <span>🌐 {t('files.plainBadge')}</span>
+                </div>
               )}
               <p className="warning">{t('files.warningPermanent')}</p>
-              {upload.encrypt && <p className="warning">{t('files.encryptPrivacy')}</p>}
+              {upload.encrypt ? (
+                <p className="warning">{t('files.encryptPrivacy')}</p>
+              ) : (
+                <p className="warning">{t('files.plainWarning')}</p>
+              )}
               <div className="row">
                 <button className="btn primary" onClick={() => void confirmUpload()}>
                   {t('files.signAndUpload')}

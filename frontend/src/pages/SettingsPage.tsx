@@ -74,6 +74,12 @@ export function SettingsPage() {
           </span>
           <input value={form.salesAddress} onChange={(e) => setForm({ ...form, salesAddress: e.target.value })} spellCheck={false} />
         </label>
+        <label className="field">
+          <span>
+            <ChainTag chain="evm" /> {t('settings.publicPublisherLabel')}
+          </span>
+          <input value={form.publicPublisherAddress} onChange={(e) => setForm({ ...form, publicPublisherAddress: e.target.value })} spellCheck={false} />
+        </label>
         <div className="row">
           <button className="btn primary" onClick={() => void save()}>
             {t('settings.save')}

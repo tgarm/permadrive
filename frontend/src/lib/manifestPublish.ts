@@ -10,6 +10,7 @@
 
 import type { ApiPromise } from '@polkadot/api'
 import { publishPrepared, prepareUpload } from './publish'
+import { getMeta, putMeta } from './store.ts'
 import type { Manifest } from './manifest'
 import type { SubstrateSigner } from './wallet/types'
 
@@ -18,6 +19,20 @@ export interface ManifestPublication {
   height: number // block containing the manifest file's remark (the Registry's location hint)
   txHash: string
 }
+
+/** Meta sidecar recording where the manifest itself was published: Registry
+ *  registration is optional (a dev fee), so sharing/link generation reads
+ *  {manifestCid, height} from here when no Registry entry exists. Keyed by
+ *  rootCid (the file-list primary key), same shape as ManifestPublication. */
+export type ManifestPublicationMeta = ManifestPublication
+
+const manifestPublishMetaKey = (rootCid: string) => `manifestPublish:${rootCid}`
+
+export const getManifestPublishMeta = (rootCid: string): Promise<ManifestPublicationMeta | undefined> =>
+  getMeta<ManifestPublicationMeta>(manifestPublishMetaKey(rootCid))
+
+export const putManifestPublishMeta = (rootCid: string, publication: ManifestPublication): Promise<void> =>
+  putMeta(manifestPublishMetaKey(rootCid), publication)
 
 export const manifestFileName = (manifest: Manifest): string => `${manifest.rootCid}.manifest.json`
 

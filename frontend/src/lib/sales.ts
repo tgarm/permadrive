@@ -1,7 +1,8 @@
 // Direct sales: pay-and-split, no escrow, no refunds, positive/negative
-// ratings. SalesSection mounts on FilesPage once config.salesAddress is set
-// (the paid-download escrow frontend was removed entirely on 2026-10-31, see
-// docs — the v1/v2 contracts stay on-chain as history). Contract essentials:
+// ratings. Once config.salesAddress is set, sharing is available (seller
+// actions live in the per-file share panel, buyer actions in the Share tab;
+// the paid-download escrow frontend was removed entirely on 2026-10-31 — the
+// v1/v2 contracts stay on-chain as history). Contract essentials:
 //  - listingId = keccak256(seller, fileKey), fileKey = keccak256(manifestCid)
 //    (same derivation as Registry v2 / Paywall); immutable revisions, purchase
 //    must name expectedRevision (the current revision) plus maxPrice/

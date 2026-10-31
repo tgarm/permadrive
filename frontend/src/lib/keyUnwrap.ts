@@ -4,7 +4,7 @@
 // signature channel first (EVM signature → HKDF, deterministic for local
 // RFC6979 keys), falling back to the passphrase channel on failure/refusal
 // (getPassphrase is injected by the caller; FilesPage's passphrase prompt is
-// that callback). Consumers: sales.ts (seller delivery), SalesSection (buyer
+// that callback). Consumers: sales.ts (seller delivery), SharePage (buyer
 // decrypt-and-download).
 
 import { fromHex } from './bytes.ts'

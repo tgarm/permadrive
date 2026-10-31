@@ -6,17 +6,28 @@ import { LanguageSelect } from './components/LanguageSelect'
 import { WalletBar } from './components/WalletBar'
 import { ThemeToggle } from './components/ThemeToggle'
 import { FilesPage } from './pages/FilesPage'
+import { SharePage } from './pages/SharePage'
 import { MessagesPage } from './pages/MessagesPage'
 import { NotesPage } from './pages/NotesPage'
 import { VaultPage } from './pages/VaultPage'
 import { AboutPage } from './pages/AboutPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { parseShareHash, type ShareLinkParams } from './lib/shareLink'
 import { useI18n } from './i18n'
 
-type Tab = 'files' | 'messages' | 'notes' | 'vault' | 'about' | 'settings'
+type Tab = 'files' | 'share' | 'messages' | 'notes' | 'vault' | 'about' | 'settings'
 
 function Shell() {
-  const [tab, setTab] = useState<Tab>('files')
+  // Deep links: parse location.hash once on mount; a `#/s?...` hash makes
+  // share the initial tab and passes the parameters to SharePage. The hash is
+  // kept, never cleared (the landing view is read-only and idempotent, a
+  // refresh re-parses, transactions only fire on explicit clicks; no
+  // hashchange listener in the MVP — pasting a new link applies on refresh).
+  const [tab, setTab] = useState<Tab>(() => (parseShareHash(location.hash).ok ? 'share' : 'files'))
+  const [deepLink] = useState<ShareLinkParams | null>(() => {
+    const parsed = parseShareHash(location.hash)
+    return parsed.ok ? parsed.params : null
+  })
   const { t } = useI18n() // each component subscribes to locale changes (same convention as xdm-bridge)
   return (
     <div className="app">
@@ -38,6 +49,9 @@ function Shell() {
         <button className={tab === 'files' ? 'tab active' : 'tab'} onClick={() => setTab('files')}>
           {t('app.nav.files')}
         </button>
+        <button className={tab === 'share' ? 'tab active' : 'tab'} onClick={() => setTab('share')}>
+          {t('app.nav.share')}
+        </button>
         <button className={tab === 'messages' ? 'tab active' : 'tab'} onClick={() => setTab('messages')}>
           {t('app.nav.messages')}
         </button>
@@ -57,6 +71,8 @@ function Shell() {
       <main>
         {tab === 'files' ? (
           <FilesPage />
+        ) : tab === 'share' ? (
+          <SharePage deepLink={deepLink} />
         ) : tab === 'messages' ? (
           <MessagesPage />
         ) : tab === 'notes' ? (
