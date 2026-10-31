@@ -773,10 +773,15 @@ export function createRunner(deps) {
     const orderCount0 = await v2read(A, testAddr, 'orderCount')
     const balBefore = await withRetry(() => A.publicClient.getBalance({ address: testAddr }))
 
-    // Scenario 1: purchase at the stale quote after a reprice → NotCurrentRevision (a swap between viewing and signing is rejected)
+    // Scenario 1: purchase at the stale quote after a reprice → NotCurrentRevision (a swap between viewing and signing is rejected).
+    // Only asserted while D2-delist has not executed yet (same class as B3: on
+    // resume the delist already completed, state moved on to NotListed; the
+    // assertion runs once and the journal keeps the evidence)
     await txStep(step('D2-reprice'), A, { to: testAddr, abi: abis, fn: 'createRevision', args: [fileKey, price * 2n, ...SELLER_MODE_ARGS()] }, { actor: 'A' })
-    await expectRevert('D2a', C, { to: testAddr, abi: abis, fn: 'purchase', args: [lid, 1n, price, 2000, 5000], value: price }, 'NotCurrentRevision')
-    check(true, 'D2 stale-revision purchase rejected (NotCurrentRevision, zero-tx simulate)')
+    if (isFresh('D2-delist')) {
+      await expectRevert('D2a', C, { to: testAddr, abi: abis, fn: 'purchase', args: [lid, 1n, price, 2000, 5000], value: price }, 'NotCurrentRevision')
+      check(true, 'D2 stale-revision purchase rejected (NotCurrentRevision, zero-tx simulate)')
+    }
 
     // Scenario 2: purchase after delist → NotListed
     await txStep(step('D2-delist'), A, { to: testAddr, abi: abis, fn: 'delist', args: [fileKey] }, { actor: 'A', essential: true })
