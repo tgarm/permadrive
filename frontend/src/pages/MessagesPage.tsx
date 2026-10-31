@@ -10,6 +10,7 @@ import { useSigner } from '../signer-context'
 import { decryptMessage, decryptPendingMessages, ensureAnnounced, sendEncryptedMessage, syncMessages } from '../lib/mailbox'
 import { listMessages, markMessageRead, type MessageRecord } from '../lib/store'
 import { useI18n } from '../i18n'
+import { ChainTag } from '../components/ChainTag'
 
 const shortAddr = (a: string): string => `${a.slice(0, 8)}…${a.slice(-6)}`
 
@@ -181,7 +182,9 @@ export function MessagesPage() {
           </button>
         </div>
         <p className="privacy-note">{t('messages.encryptNotice')}</p>
-        <p className="muted">{t('messages.enableExplain')}</p>
+        <p className="muted">
+          <ChainTag chain="evm" /> {t('messages.enableExplain')}
+        </p>
         <button className="btn small" onClick={() => void enableReceiving()} disabled={!evm || busy}>
           {t('messages.enableReceiving')}
         </button>

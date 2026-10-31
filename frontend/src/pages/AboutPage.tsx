@@ -10,6 +10,7 @@ import { useChain } from '../chain-context'
 import { registryParams, type RegistryParams } from '../lib/registry'
 import { formatAi3 } from '../lib/bytes'
 import { useI18n } from '../i18n'
+import { ChainTag } from '../components/ChainTag'
 
 // Official AutoDrive mainnet price (measured 2026-10, including its
 // CREDITS_PRICE_MULTIPLIER=2.0); credits expire after 90 days and purchasing
@@ -67,8 +68,12 @@ export function AboutPage() {
           <thead>
             <tr>
               <th>{t('about.thSize')}</th>
-              <th>{t('about.thStorageFee')}</th>
-              <th>{t('about.thRegistryFee')}</th>
+              <th>
+                <ChainTag chain="consensus" /> {t('about.thStorageFee')}
+              </th>
+              <th>
+                <ChainTag chain="evm" /> {t('about.thRegistryFee')}
+              </th>
               <th>{t('about.thTotal')}</th>
               <th>{t('about.thOfficial')}</th>
               <th>{t('about.thDifference')}</th>

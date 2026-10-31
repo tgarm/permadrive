@@ -33,12 +33,14 @@
     "nVersions": "{0} 个版本",
     "oneNode": "1 个节点",
     "nNodes": "{0} 个节点",
-    "storageFeeEstimate": "链上存储费（估算）",
+    "storageFeeEstimate": "存储费（共识链，估算）",
     "registryDevFee": "目录登记 dev fee",
     "signAndPublish": "签名并上链",
     "oneOnChainVersion": "1 个链上版本",
     "nOnChainVersions": "{0} 个链上版本",
-    "ok": "确定"
+    "ok": "确定",
+    "chainConsensus": "共识链",
+    "chainEvm": "EVM"
   },
   "stage": {
     "packing": "本地打包中（IPLD 分块）…",
@@ -67,9 +69,9 @@
     "aria": "切换配色方案"
   },
   "wallet": {
-    "substrateTitle": "钱包（Substrate）",
+    "substrateTitle": "钱包 · Substrate 扩展",
     "noExtension": "未检测到钱包扩展（Talisman / SubWallet / Polkadot.js）",
-    "registryTitle": "链上目录（EVM · Auto-EVM 主网）",
+    "registryTitle": "链上目录 · EVM 合约",
     "connectEvm": "连接浏览器 EVM 钱包",
     "noEvmExtension": "未检测到 EVM 钱包扩展 —— 本地密钥 (dev) 可用",
     "devToggle": "本地密钥 (dev)",
@@ -79,7 +81,7 @@
     "useBoth": "使用（Substrate + EVM）",
     "clear": "清除",
     "noSigner": "未激活签名者",
-    "substrateLabel": "Substrate：{0} · {1}",
+    "substrateLabel": "共识链：{0} · {1}",
     "evmLabel": "EVM：{0} · {1}",
     "evmSuffix": "（EVM）",
     "labelLocal": "本地密钥 (dev)",
@@ -311,7 +313,7 @@
   "settings": {
     "networkTitle": "网络与端点",
     "networkIntro": "manifest 只记网络标识（mainnet），端点是本应用配置 —— 换端点不影响已有文件的取回。公共 RPC 会限流，连续请求间隔默认 ≥1.6s。",
-    "rpcLabel": "共识链 RPC（HTTP）",
+    "rpcLabel": "RPC 节点（HTTP）",
     "indexerLabel": "object-mapping indexer（WSS）",
     "intervalLabel": "RPC 请求最小间隔（ms）",
     "evmRpcLabel": "Auto-EVM RPC（链上目录）",
@@ -478,7 +480,7 @@
     "legacyListFrozen": "v1 合约冻结期间不可上架 —— PaywallV2 部署后恢复。",
     "legacyFrozenShort": "v1 冻结",
     "legacyConfirmRisk": "旧订单在冻结的 v1 合约上按「当前」listing 卖家结算。确认前的核对无法完全排除「核对后、上链前」被覆盖（TOCTOU）——高价值订单建议直接退款。",
-    "confirmExplain": "确认收货并向卖家放款？该交易需要支付 gas，确认后此订单不能退款。"
+    "confirmExplain": "确认收货并向卖家放款？该 EVM 交易需要支付 Auto-EVM gas，确认后此订单不能退款。"
   },
   "publishPending": {
     "title": "有 {0} 个发布结果待核实",
@@ -495,7 +497,7 @@
   },
   "sales": {
     "title": "直接销售",
-    "notice": "直接销售模式：货款在同一笔交易直接付给卖家（含 10% 平台费）——无托管、平台不提供退款。交付为人工：卖家在线时交付文件密钥。购买即获得文件本身（无 DRM）。仅加密文件有意义。请如实评价：好/差评上链（需要 gas），每个商品每地址一票，可修改。",
+    "notice": "直接销售模式：货款在同一笔 Auto-EVM 交易直接付给卖家（含 10% 平台费）——无托管、平台不提供退款。交付为人工：卖家在线时通过链上私信交付文件密钥。购买即获得文件本身（无 DRM）。仅加密文件有意义。请如实评价：好/差评上链（需要 Auto-EVM gas），每个商品每地址一票，可修改。",
     "connectFirst": "连接钱包后即可使用直接销售。",
     "myListings": "我的在售（卖家）",
     "selectEntry": "文件",
@@ -516,7 +518,7 @@
     "view": "查看",
     "viewEmpty": "该地址没有目录条目。",
     "buy": "购买",
-    "buyConfirm": "以 {0} AI3 购买？\n\n货款将随本笔交易直接付给卖家（另付 gas）。平台不提供退款——能否拿到密钥取决于卖家在线交付。是否继续？",
+    "buyConfirm": "以 {0} AI3 购买？\n\n货款随本笔 EVM 交易直接付给卖家（另付 Auto-EVM gas）。平台不提供退款——能否拿到密钥取决于卖家在线交付。是否继续？",
     "purchasedOk": "已购买「{0}」（{1} AI3）——等待卖家交付密钥。",
     "notListed": "未上架（或上架信息已变化）——请刷新目录。",
     "myOrders": "我的订单（买家）",
@@ -529,9 +531,16 @@
     "waitingDelivery": "密钥尚未交付——卖家在线时会交付，稍后再试。",
     "rateUp": "好评",
     "rateDown": "差评",
-    "rateConfirm": "将评价记录上链？该交易需要支付 gas。每个商品每地址一票，再次评价会覆盖原票。",
+    "rateConfirm": "将评价记录上链？该 EVM 交易需要支付 Auto-EVM gas。每个商品每地址一票，再次评价会覆盖原票。",
     "ratedOk": "评价已记录（{0}）。",
     "ratingLine": "👍 {0} · 👎 {1} · {2} 人购买",
-    "noRatings": "暂无评价"
+    "noRatings": "暂无评价",
+    "receiveKeyMismatch": "当前钱包的收信密钥与链上登记的不一致（可能换过钱包实现）。为避免付款后收不到交付密钥，请先到「消息」页重新启用收信（会广播当前钱包的加密公钥），再回来购买。",
+    "syncingInbox": "正在同步收件箱并解密密钥消息…",
+    "inboxSynced": "收件箱已同步。",
+    "syncInbox": "检查收件箱",
+    "syncInboxHint": "同步链上收件箱并解密卖家发来的交付密钥（EVM 侧操作，解密弹窗来自你的钱包）",
+    "ratingFailed": "评价加载失败（点「查看」重试）",
+    "rateNoOp": "该商品你已是此票——评价未变化。服务口径归属仍为原订单，不会随新订单迁移。"
   }
 }

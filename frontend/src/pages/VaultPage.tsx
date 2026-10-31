@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useChain } from '../chain-context'
 import { useSigner } from '../signer-context'
 import { Hint } from '../components/Hint'
+import { ChainTag } from '../components/ChainTag'
 import { formatBytes } from '../lib/bytes'
 import { estimateFee, prepareUpload, publishPrepared, type PreparedUpload } from '../lib/publish'
 import { publishManifestToChain } from '../lib/manifestPublish'
@@ -687,11 +688,15 @@ export function VaultPage() {
                     </span>
                   </div>
                   <div className="kv fee">
-                    <span>{t('common.storageFeeEstimate')}</span>
+                    <span>
+                      <ChainTag chain="consensus" /> {t('common.storageFeeEstimate')}
+                    </span>
                     <span>≈ {session.fee.ai3.toFixed(4)} AI3</span>
                   </div>
                   <div className="kv fee">
-                    <span>{t('common.registryDevFee')}</span>
+                    <span>
+                      <ChainTag chain="evm" /> {t('common.registryDevFee')}
+                    </span>
                     <span>{session.devFee.ai3} AI3</span>
                   </div>
                   <p className="warning">{t('vault.warningCiphertext')}</p>

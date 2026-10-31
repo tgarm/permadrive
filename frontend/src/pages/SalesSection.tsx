@@ -13,15 +13,23 @@
 //
 // Wallet-dialog transparency (same policy as the first wallet-dialog batch):
 // the purchase confirm states "no platform refunds + the seller must be online
-// + gas"; a read-only, zero-popup recipient-key precheck (getAnnouncedKey)
-// guides enabling message receiving first — otherwise the seller cannot encrypt
-// the delivery. Prices display in AI3 and go on-chain in wei.
+// + Auto-EVM gas"; a two-step receiving precheck — (1) a read-only zero-popup
+// on-chain key check guiding enabling message receiving first, (2) a
+// receive-capability comparison (this wallet's encryption key vs the announced
+// one, guarding against a switched wallet implementation that could pay
+// without being able to receive the delivery; local derives with zero popups,
+// injected prompts once after the user confirms). Prices display in AI3 and go
+// on-chain in wei. Rating/directory data is always cached per seller scope
+// (same CID across sellers must never mix; unloaded/failed never masquerades
+// as "no ratings").
 
 import { useCallback, useEffect, useState } from 'react'
 import { useChain } from '../chain-context'
 import { useSigner } from '../signer-context'
 import { formatAi3, formatBytes } from '../lib/bytes'
-import { getAnnouncedKey } from '../lib/mailbox'
+import { autoEvmChain } from '../lib/evm'
+import { ChainTag } from '../components/ChainTag'
+import { decryptMessage, encryptionPublicKeyFor, getAnnouncedKey, mailboxAddress, syncMessages } from '../lib/mailbox'
 import { unwrapManifestKey } from '../lib/paywall'
 import {
   deliverKeySales,
@@ -36,6 +44,7 @@ import {
   purchaseSalesWithQuote,
   rateSales,
   salesActive,
+  salesAddress,
   unwrapDeliveredKeySales,
   createRevisionSales,
   type SalesOrderRow,
@@ -50,6 +59,26 @@ import { saveBlob } from '../lib/download'
 import { useI18n } from '../i18n'
 
 const short = (a: string): string => (a ? `${a.slice(0, 8)}…${a.slice(-6)}` : '—')
+const ZERO_ADDR = '0x0000000000000000000000000000000000000000'
+
+// Rating/vote cache keys: must include the seller (the same CID across
+// different sellers must never mix ratings)
+const ratingKey = (seller: string, cid: string) => `${seller.toLowerCase()}:${cid}`
+
+type RatingState = { status: 'ok' | 'failed'; up: bigint; down: bigint; buyers: bigint }
+
+const ratingFailedState = (): RatingState => ({ status: 'failed', up: 0n, down: 0n, buyers: 0n })
+
+/** Single rating read (failure gets its own state — a network error is never
+ *  passed off as "no ratings") */
+async function loadRating(seller: string, cid: string): Promise<RatingState> {
+  try {
+    const r = await getRatingSales(seller, cid)
+    return { status: 'ok', ...r }
+  } catch {
+    return ratingFailedState()
+  }
+}
 
 export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () => Promise<string | null>; onNotice?: (s: string) => void }) {
   const { t } = useI18n()
@@ -58,14 +87,14 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
 
   const [entries, setEntries] = useState<RegistryEntry[]>([])
   const [listings, setListings] = useState<Map<string, { price: bigint; revision: bigint } | null>>(new Map())
-  const [ratings, setRatings] = useState<Map<string, { up: bigint; down: bigint; buyers: bigint }>>(new Map())
+  const [ratings, setRatings] = useState<Map<string, RatingState>>(new Map()) // ratingKey(seller,cid) → stateful rating
   const [pending, setPending] = useState<SalesOrderRow[]>([])
   const [orders, setOrders] = useState<SalesOrderRow[]>([])
-  const [votes, setVotes] = useState<Map<string, number>>(new Map()) // lid → current vote
+  const [votes, setVotes] = useState<Map<string, number>>(new Map()) // ratingKey(seller,cid) → current vote
   const [priceEntry, setPriceEntry] = useState('')
   const [priceValue, setPriceValue] = useState('')
   const [viewAddr, setViewAddr] = useState('')
-  const [viewRows, setViewRows] = useState<{ entry: RegistryEntry; listing: Awaited<ReturnType<typeof getListingSales>> }[] | null>(null)
+  const [viewRows, setViewRows] = useState<{ entry: RegistryEntry; listing: Awaited<ReturnType<typeof getListingSales>>; rating: RatingState | null }[] | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -76,12 +105,12 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
     const myEntries = await fetchEntries(evm.address)
     setEntries(myEntries)
     const lmap = new Map<string, { price: bigint; revision: bigint } | null>()
-    const rmap = new Map<string, { up: bigint; down: bigint; buyers: bigint }>()
+    const rmap = new Map<string, RatingState>()
     const vmap = new Map<string, number>()
     for (const e of myEntries) {
       const l = await getListingSales(evm.address, e.manifestCid)
       lmap.set(e.manifestCid, l ? { price: l.price, revision: l.revision } : null)
-      rmap.set(e.manifestCid, await getRatingSales(evm.address, e.manifestCid))
+      rmap.set(ratingKey(evm.address, e.manifestCid), await loadRating(evm.address, e.manifestCid))
     }
     setListings(lmap)
     setRatings(rmap)
@@ -91,8 +120,8 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
     setOrders(rows)
     for (const row of rows) {
       if (!row.entry) continue
-      const lid = row.entry.manifestCid
-      if (!vmap.has(lid)) vmap.set(lid, await getVoteSales(row.seller, lid, evm.address))
+      const k = ratingKey(row.seller, row.entry.manifestCid)
+      if (!vmap.has(k)) vmap.set(k, await getVoteSales(row.seller, row.entry.manifestCid, evm.address))
     }
     setVotes(vmap)
   }, [evm])
@@ -161,10 +190,18 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
     if (!viewAddr.trim()) return
     setBusy(true)
     try {
-      const rows = await fetchEntries(viewAddr.trim())
-      const out: { entry: RegistryEntry; listing: Awaited<ReturnType<typeof getListingSales>> }[] = []
+      const seller = viewAddr.trim()
+      const rows = await fetchEntries(seller)
+      // Ratings load together with the listing (into the ViewRow): browsing
+      // someone else's directory loads their ratings too; failure gets its own
+      // state — never "unloaded masquerading as no ratings", never a crash
+      const out: { entry: RegistryEntry; listing: Awaited<ReturnType<typeof getListingSales>>; rating: RatingState | null }[] = []
       for (const entry of rows) {
-        out.push({ entry, listing: await getListingSales(viewAddr.trim(), entry.manifestCid) })
+        out.push({
+          entry,
+          listing: await getListingSales(seller, entry.manifestCid),
+          rating: await loadRating(seller, entry.manifestCid),
+        })
       }
       setViewRows(out)
     } catch (e) {
@@ -178,8 +215,10 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
     if (!evm) return
     setBusy(true)
     try {
-      // recipient-key precheck (read-only, zero popups): without it the seller cannot encrypt the delivery
-      if (!(await getAnnouncedKey(evm.address))) {
+      // receiving precheck step 1 (read-only, zero popups): without an announced
+      // key the seller cannot encrypt the delivery
+      const announced = await getAnnouncedKey(evm.address)
+      if (!announced) {
         say(t('paywall.enableReceivingFirst'))
         return
       }
@@ -191,6 +230,17 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
       }
       // pre-payment confirm: direct sales has no platform refunds + the seller must be online to deliver
       if (!window.confirm(t('sales.buyConfirm', [formatAi3(quote.price)]))) return
+      // receiving precheck step 2: a non-empty on-chain key does not prove this
+      // wallet can decrypt it — with the same address under a switched wallet
+      // implementation, the announced key may not match this wallet's
+      // derivation and the paid delivery would be unreceivable. local derives
+      // with zero popups; injected fetches the encryption key (one prompt after
+      // the user confirmed = a user-authorized small round trip)
+      const currentKey = await encryptionPublicKeyFor(evm)
+      if (currentKey !== announced) {
+        say(t('sales.receiveKeyMismatch'))
+        return
+      }
       await purchaseSalesWithQuote(evm, quote)
       say(t('sales.purchasedOk', [entry.name, formatAi3(quote.price)]))
       await reload()
@@ -201,21 +251,33 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
     }
   }
 
-  // pdgrant v3 strict match: addressed to self, from the order's seller (or snapshot
-  // provider), sales/orderId/manifestCid all matching; wrong candidates are isolated
-  // and tried one by one
+  // pdgrant v3 strict match: message chain/contract domains + the grant's
+  // chainId/sales/orderId/buyer/seller/provider all checked against the order
+  // snapshot — a same-orderId grant from a different sales instance can never
+  // be misused; wrong candidates are isolated and tried one by one
   const findGrant = async (row: SalesOrderRow): Promise<Uint8Array | null> => {
     if (!evm || !row.entry) return null
     const me = evm.address.toLowerCase()
+    const sales = salesAddress()?.toLowerCase()
+    if (!sales) return null
+    const mailbox = mailboxAddress().toLowerCase()
+    const expectedProvider = row.provider && row.provider !== ZERO_ADDR ? row.provider.toLowerCase() : null
     const msgs = await listMessages()
     const candidates = []
     for (const m of msgs) {
       if (!m.plain) continue
       if (m.to && m.to.toLowerCase() !== me) continue
-      if (m.from.toLowerCase() !== row.seller && (!row.provider || m.from.toLowerCase() !== row.provider)) continue
+      if (m.chainId != null && m.chainId !== autoEvmChain.id) continue // message chain domain
+      if (!m.id.toLowerCase().startsWith(`${mailbox}:`)) continue // message contract domain (id = `${contract}:${eventId}:${txHash}`)
+      if (m.from.toLowerCase() !== row.seller && (!expectedProvider || m.from.toLowerCase() !== expectedProvider)) continue
       const g = isPdGrantV3(m.plain)
       if (!g || g.manifestCid !== row.entry.manifestCid) continue
+      if (g.chainId !== autoEvmChain.id) continue // grant chain domain
+      if (g.sales.toLowerCase() !== sales) continue // grant sales-contract domain
       if (g.orderId !== row.orderId.toString() || g.buyer?.toLowerCase() !== me || g.seller?.toLowerCase() !== row.seller) continue
+      // provider domain: an order with a service requires the same provider on
+      // the grant; a service-less order rejects any non-zero provider
+      if (expectedProvider ? g.provider?.toLowerCase() !== expectedProvider : !!g.provider && g.provider.toLowerCase() !== ZERO_ADDR) continue
       candidates.push(g)
     }
     for (const g of candidates) {
@@ -228,11 +290,47 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
     return null
   }
 
+  /** Inbox sync + targeted decryption: an explicit entry point on the orders
+   *  section (no detour through the Messages page); only the current order's
+   *  counterparties' messages are decrypted, keeping prompts minimal */
+  const syncAndDecryptFor = async (rows: SalesOrderRow[]) => {
+    if (!evm) return
+    const me = evm.address.toLowerCase()
+    say(t('sales.syncingInbox'))
+    await syncMessages(evm.address, evm)
+    const counterparts = new Set<string>()
+    for (const r of rows) {
+      counterparts.add(r.seller)
+      if (r.provider && r.provider !== ZERO_ADDR) counterparts.add(r.provider)
+    }
+    const pendingMsgs = (await listMessages()).filter(
+      (m) => !m.plain && m.decryptStatus !== 'ok' && m.to?.toLowerCase() === me && counterparts.has(m.from.toLowerCase()),
+    )
+    for (const m of pendingMsgs) {
+      try {
+        await decryptMessage(evm, m) // per-message failure isolation
+      } catch {
+        /* undecryptable (e.g. old ciphertext from another chain) stays as-is */
+      }
+    }
+  }
+
   const downloadPurchased = async (row: SalesOrderRow) => {
     if (!evm || !row.entry) return
     setBusy(true)
     try {
-      const keyBytes = await findGrant(row)
+      let keyBytes = await findGrant(row)
+      if (!keyBytes) {
+        // no locally decrypted pdgrant: sync + targeted decrypt proactively and
+        // look again (a user-clicked entry point; injected decrypt prompts are
+        // user-authorized)
+        try {
+          await syncAndDecryptFor([row])
+          keyBytes = await findGrant(row)
+        } catch {
+          /* sync failure counts as not-yet-delivered; the wait hint below covers it */
+        }
+      }
       if (!keyBytes) {
         // no pdgrant yet (a self-purchase skips the channel, or the seller has not
         // responded) — if this machine already holds the file, unwrap K directly
@@ -270,17 +368,38 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
   }
 
   // rate / change vote: no delivery precondition (an undelivered buyer may rate
-  // negatively); gas stated up front; clicking the same vote again is a no-op
+  // negatively); Auto-EVM gas stated up front; clicking the same vote again
+  // explains itself (contract-idempotent no-op; service attribution stays with
+  // the original order and does not migrate to a newer one)
   const vote = async (row: SalesOrderRow, positive: boolean) => {
     if (!evm || !row.entry) return
-    const lid = row.entry.manifestCid
-    const current = votes.get(lid) ?? 0
-    if ((positive && current === 1) || (!positive && current === -1)) return // same vote no-op (contract-idempotent)
+    const k = ratingKey(row.seller, row.entry.manifestCid)
+    const current = votes.get(k) ?? 0
+    if ((positive && current === 1) || (!positive && current === -1)) {
+      say(t('sales.rateNoOp'))
+      return
+    }
     if (!window.confirm(t('sales.rateConfirm'))) return
     setBusy(true)
     try {
       await rateSales(evm, row.orderId, positive)
       say(t('sales.ratedOk', [positive ? t('sales.rateUp') : t('sales.rateDown')]))
+      await reload()
+    } catch (e) {
+      say(`✗ ${(e as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // manual inbox entry point: one click on the orders section to sync +
+  // targeted decrypt, no detour through the Messages page
+  const syncInbox = async () => {
+    if (!evm) return
+    setBusy(true)
+    try {
+      await syncAndDecryptFor(orders)
+      say(t('sales.inboxSynced'))
       await reload()
     } catch (e) {
       say(`✗ ${(e as Error).message}`)
@@ -296,7 +415,9 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
       <div className="card-head">
         <h2>{t('sales.title')}</h2>
       </div>
-      <p className="privacy-note">{t('sales.notice')}</p>
+      <p className="privacy-note">
+        <ChainTag chain="evm" /> {t('sales.notice')}
+      </p>
       {notice && <div className="notice">{notice}</div>}
       {!evm && <div className="notice">{t('sales.connectFirst')}</div>}
 
@@ -337,15 +458,17 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
               <table className="files-table">
                 <tbody>
                   {myActiveListings.map((e) => {
-                    const r = ratings.get(e.manifestCid)
+                    const r = evm ? ratings.get(ratingKey(evm.address, e.manifestCid)) : undefined
                     return (
                       <tr key={e.manifestCid}>
                         <td>
                           <div>{e.name}</div>
                           <div className="muted small-text">
-                            {r && (r.up > 0n || r.down > 0n)
+                            {r?.status === 'ok' && (r.up > 0n || r.down > 0n)
                               ? t('sales.ratingLine', [r.up.toString(), r.down.toString(), r.buyers.toString()])
-                              : t('sales.noRatings')}
+                              : r?.status === 'failed'
+                                ? t('sales.ratingFailed')
+                                : t('sales.noRatings')}
                           </div>
                         </td>
                         <td>{formatAi3(listings.get(e.manifestCid)!.price)} AI3</td>
@@ -404,16 +527,26 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
               ) : (
                 <table className="files-table">
                   <tbody>
-                    {viewRows.map(({ entry, listing }) => {
-                      const r = ratings.get(entry.manifestCid)
+                    {viewRows.map(({ entry, listing, rating }) => {
+                      // ratings ride with the ViewRow: no listing → no rating
+                      // segment; failure gets its own state; ok-and-zero = no
+                      // ratings. No non-null assertions anywhere.
+                      const ratingSeg = !listing
+                        ? ''
+                        : rating?.status === 'failed'
+                          ? ' · ' + t('sales.ratingFailed')
+                          : rating?.status === 'ok' && (rating.up > 0n || rating.down > 0n)
+                            ? ' · ' + t('sales.ratingLine', [rating.up.toString(), rating.down.toString(), rating.buyers.toString()])
+                            : rating?.status === 'ok'
+                              ? ' · ' + t('sales.noRatings')
+                              : ''
                       return (
                         <tr key={entry.manifestCid}>
                           <td>
                             <div>{entry.name}</div>
                             <div className="muted small-text">
                               {formatBytes(Number(entry.size))}
-                              {listing && (r!.up > 0n || r!.down > 0n) ? ' · ' + t('sales.ratingLine', [r!.up.toString(), r!.down.toString(), r!.buyers.toString()]) : ''}
-                              {listing && r && r.up === 0n && r.down === 0n ? ' · ' + t('sales.noRatings') : ''}
+                              {ratingSeg}
                             </div>
                           </td>
                           <td>
@@ -437,14 +570,21 @@ export function SalesSection({ getPassphrase, onNotice }: { getPassphrase: () =>
               )
             )}
 
-            <h3>{t('sales.myOrders')}</h3>
+            <div className="card-head" style={{ marginTop: 8 }}>
+              <h3>{t('sales.myOrders')}</h3>
+              {orders.length > 0 && (
+                <button className="btn ghost small" disabled={busy} title={t('sales.syncInboxHint')} onClick={() => void syncInbox()}>
+                  {t('sales.syncInbox')}
+                </button>
+              )}
+            </div>
             {orders.length === 0 ? (
               <p className="muted small-text">{t('sales.ordersEmpty')}</p>
             ) : (
               <table className="files-table">
                 <tbody>
                   {orders.map((row) => {
-                    const myVote = row.entry ? votes.get(row.entry.manifestCid) ?? 0 : 0
+                    const myVote = row.entry ? (votes.get(ratingKey(row.seller, row.entry.manifestCid)) ?? 0) : 0
                     return (
                       <tr key={`o-${row.orderId}`}>
                         <td>

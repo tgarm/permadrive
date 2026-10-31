@@ -59,6 +59,7 @@ import { aesGcmDecrypt } from '../lib/vaultCrypto'
 import { fromHex, sha256Hex } from '../lib/bytes'
 import { saveBlob } from '../lib/download'
 import { useI18n } from '../i18n'
+import { ChainTag } from '../components/ChainTag'
 
 const short = (a: string): string => (a ? `${a.slice(0, 8)}…${a.slice(-6)}` : '—')
 
@@ -372,7 +373,9 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
           </button>
         )}
       </div>
-      <p className="privacy-note">{t('paywall.notice')}</p>
+      <p className="privacy-note">
+        <ChainTag chain="evm" /> {t('paywall.notice')}
+      </p>
       {!v2 && <p className="privacy-note">{t('paywall.legacyFrozenNotice')}</p>}
       {notice && <div className="notice">{notice}</div>}
       {!evm && <div className="notice">{t('paywall.connectFirst')}</div>}

@@ -213,6 +213,12 @@ async function rating(lid) {
   const [up, down, buyers] = await read('ratingOf', [lid])
   return { up, down, buyers }
 }
+// revision(lid, rid) convenience read (explicit named revisionOf, not the unnamed
+// tuple of the public struct getter)
+async function revision(lid, rid) {
+  const [price, attestationExpiry, platformBps, providerBps, deliveryMode, seller, provider, providerPayout, fileKey, termsHash, revoked] = await read('revisionOf', [lid, rid])
+  return { price, attestationExpiry, platformBps, providerBps, deliveryMode, seller, provider, providerPayout, fileKey, termsHash, revoked }
+}
 // EIP-712 provider attestation (signed by the local service P; domain = PermaDrive DirectSales v1 @ ADDR)
 const ATTEST_TYPES = {
   ProviderAttestation: [
@@ -234,9 +240,19 @@ const now = async () => Number((await A.publicClient.getBlock()).timestamp)
 // ---- t01 normal direct purchase (Seller mode): exact three-way split, order snapshot, zero retained funds ----
 const FK1 = key('t01')
 const LID1 = lidOf(B.address, FK1)
-await write(B, 'createRevision', [FK1, PRICE, ZERO, ZERO, 0, 0, keccak256(toHex('t01-terms')), 0, '0x'])
+const TERMS1 = keccak256(toHex('t01-terms'))
+const listRx1 = await write(B, 'createRevision', [FK1, PRICE, ZERO, ZERO, 0, 0, TERMS1, 0, '0x'])
 ok((await read('currentRevision', [LID1])) === 1n, 't01 list readback (currentRevision=1, seller namespace)')
 ok((await read('listingCount')) === 1n && (await read('listingLog', [0n])) === LID1, 't01 listingLog[0] = LID1 (appended on first listing)')
+// terms hash: state / event / argument all agree — only a non-zero terms hash can
+// expose "event written but state forgotten"
+{
+  const rev = await revision(LID1, 1n)
+  ok(rev.termsHash === TERMS1, 't01 revisionOf.termsHash stored in state (readable back)')
+  const ev = eventsOf(listRx1).find((e) => e.eventName === 'Revised')
+  ok(ev?.args?.termsHash === TERMS1, 't01 Revised event termsHash matches the argument')
+  ok(rev.termsHash === ev?.args?.termsHash, 't01 terms hash state/event agreement')
+}
 {
   const [a0, b0, c0] = [await bal(A), await bal(B), await bal(C)]
   const rx = await write(C, 'purchase', [LID1, 1n, PRICE, 2000, 5000], PRICE)
@@ -257,6 +273,7 @@ ok((await A.publicClient.getBalance({ address: ADDR })) === 0n, 't01 contract ba
 {
   await write(B, 'createRevision', [FK1, PRICE * 2n, ZERO, ZERO, 0, 0, keccak256(toHex('t02-terms')), 0, '0x'])
   ok((await read('currentRevision', [LID1])) === 2n, 't02 reprice = new revision (currentRevision=2)')
+  ok((await revision(LID1, 2n)).termsHash === keccak256(toHex('t02-terms')) && (await revision(LID1, 2n)).termsHash !== TERMS1, "t02 the new revision's termsHash follows the argument")
   ok((await read('listingCount')) === 1n, 't02 a new revision on the same listing does not append to listingLog again')
   await expectRevert(() => write(C, 'purchase', [LID1, 1n, PRICE * 2n, 2000, 5000], PRICE * 2n), 'NotCurrentRevision')
   ok(true, 't02 expectedRevision=old revision → NotCurrentRevision (a swap between viewing and signing is rejected)')
@@ -339,6 +356,7 @@ const ATTEST8 = await signAttestation(P, {
 })
 await write(B, 'createRevision', [FK8, PRICE, P.address, P.address, 2000, 1, TERMS8, attestExpiry, ATTEST8])
 ok((await read('currentRevision', [LID8])) === 1n, 't08 provider-mode listing (EIP-712 attestation verifies, cross-checked against the contract DOMAIN_SEPARATOR)')
+ok((await revision(LID8, 1n)).termsHash === TERMS8, 't08 provider revision termsHash stored (service terms readable back)')
 {
   const [a0, b0, p0, c0] = [await bal(A), await bal(B), await bal(P), await bal(C)]
   const rx = await write(C, 'purchase', [LID8, 1n, PRICE, 2000, 5000], PRICE)
@@ -551,6 +569,7 @@ async function findBuyerOrder(lid, buyer) {
   ok(rev15[2] === 0, 't15 the new revision snapshots platformBps=0 (rate changes only affect new quotes)')
   const rev1 = await read('revisionOf', [LID1, 1n])
   ok(rev1[2] === BPS0, 't15 the old revision snapshot still has platformBps 1000 (quotes are stable)')
+  ok(rev1[9] === TERMS1, "t15 the old revision's termsHash is unaffected by later revisions")
   const o2 = await order(2n)
   ok(o2.platformBps === BPS0, 't15 completed orders keep their fee snapshot')
   await write(B, 'markKeySent', [2n])

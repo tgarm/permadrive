@@ -10,6 +10,11 @@
   --ok: #3fb950;
   --warn: #d29922;
   --danger: #f85149;
+  /* Chain-side markers: consensus = teal (storage/publishing), EVM = violet
+     (registry fees / purchases / gas). Rule: any wallet/balance/fee element
+     belonging to one chain gets a nearby ChainTag or colored text */
+  --chain-consensus: #2dd4bf;
+  --chain-evm: #a78bfa;
   font-family: -apple-system, 'PingFang SC', 'Segoe UI', Roboto, sans-serif;
 }
 
@@ -26,6 +31,8 @@
   --ok: #1a7f37;
   --warn: #9a6700;
   --danger: #cf222e;
+  --chain-consensus: #0f766e;
+  --chain-evm: #6d28d9;
 }
 
 * {
@@ -166,6 +173,50 @@ body {
 
 .active-signer.on {
   color: var(--ok);
+}
+
+/* ---- chain-side markers (unified color rule) ---- */
+
+.chain-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 17px;
+  border: 1px solid transparent;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
+.chain-tag::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.chain-tag.consensus {
+  color: var(--chain-consensus);
+  border-color: color-mix(in srgb, var(--chain-consensus) 35%, transparent);
+  background: color-mix(in srgb, var(--chain-consensus) 12%, transparent);
+}
+
+.chain-tag.evm {
+  color: var(--chain-evm);
+  border-color: color-mix(in srgb, var(--chain-evm) 35%, transparent);
+  background: color-mix(in srgb, var(--chain-evm) 12%, transparent);
+}
+
+.txt-consensus {
+  color: var(--chain-consensus);
+}
+
+.txt-evm {
+  color: var(--chain-evm);
 }
 
 /* ---- tabs / nav ---- */

@@ -12,9 +12,10 @@
 //                                                     # only (gates identical to finish)
 //
 // Paths: d1 = normal direct purchase/delivery/key-grade download/rating change
-// (test instance); d2 = failed purchase rolls back atomically (test instance, zero
-// deals and zero fund movement); a = production instance, real file + real Mailbox
-// delivery + rating.
+// (test instance, buyer B); d2 = failed purchase rolls back atomically (test
+// instance, zero deals and zero fund movement, buyer C simulate); a = production
+// instance, real file + real Mailbox delivery + rating (buyer C). Role model:
+// A/B/C/T separated (B=buyer one, C=buyer two, T=treasury read-only).
 //
 // Exit codes: 0 all mandatory paths pass; 1 definite failure; 2 blocked / unknown /
 // incomplete; 3 waiting for on-chain time.
@@ -87,11 +88,13 @@ function withLegacyFeeFallback(c) {
   return c
 }
 
-const A = withLegacyFeeFallback(clients(0)) // seller / owner / treasury / Registry registrant / consensus publisher (same mnemonic)
-const C = withLegacyFeeFallback(clients(2)) // buyer (separate address; index 1 is reserved for the historical adversarial scripts)
+const A = withLegacyFeeFallback(clients(0)) // seller / Registry registrant / consensus publisher (same mnemonic; no longer the platform payee)
+const B = withLegacyFeeFallback(clients(3)) // buyer one (d1: normal purchase/delivery/rating change)
+const C = withLegacyFeeFallback(clients(2)) // buyer two (path a: the second purchase; index 1 is reserved for the historical adversarial scripts)
+const T = clients(4) // platform payee (treasury) — read-only, never signs or sends; deploy with TREASURY=T's address
 
 const runner = createRunner({
-  A, C,
+  A, B, C, T,
   abis: artifactSales.abi,
   mailboxAbis: mailboxArtifact.abi,
   registryAbi: REGISTRY_ABI,

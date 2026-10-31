@@ -309,6 +309,7 @@ contract DirectSales {
         r.provider = provider;
         r.providerPayout = providerPayout;
         r.fileKey = fileKey;
+        r.termsHash = termsHash; // store the terms hash in state: readable back via revisionOf
         if (rid == 1) {
             listingLog[listingCount] = lid;
             listingCount++;

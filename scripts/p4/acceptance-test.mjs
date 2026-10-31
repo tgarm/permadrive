@@ -57,7 +57,9 @@ const artifactSales = JSON.parse(readFileSync(path.join(ROOT, 'contracts/out/Dir
 const mailboxArtifact = JSON.parse(path.join(ROOT, 'contracts/out/Mailbox.json') ? readFileSync(path.join(ROOT, 'contracts/out/Mailbox.json'), 'utf8') : '{}')
 
 const A_ADDR = '0x' + 'a'.repeat(40)
-const C_ADDR = '0x' + 'c'.repeat(40)
+const B_ADDR = '0x' + 'b'.repeat(40) // buyer one (d1)
+const C_ADDR = '0x' + 'c'.repeat(40) // buyer two (path a / unauthorized actor)
+const T_ADDR = '0x' + 'e'.repeat(40) // platform payee (treasury, receives only)
 const MAIN = '0x' + '1'.repeat(40)
 const TEST = '0x' + '2'.repeat(40)
 const REG = '0x' + '3'.repeat(40)
@@ -170,9 +172,9 @@ function makeMockConsensus(clock) {
 function makeMockEvm(faults = {}, clock = { t: 0 }, opts = {}) {
   const state = {
     block: 100,
-    balances: new Map([[A_ADDR, 5n * AI3], [C_ADDR, 1n * AI3], [MAIN, 0n], [TEST, 0n], [REG, 0n], [MBX, 0n]]),
+    balances: new Map([[A_ADDR, 5n * AI3], [B_ADDR, 1n * AI3], [C_ADDR, 1n * AI3], [T_ADDR, 0n], [MAIN, 0n], [TEST, 0n], [REG, 0n], [MBX, 0n]]),
     history: [],
-    nonces: new Map([[A_ADDR, 0n], [C_ADDR, 0n]]),
+    nonces: new Map([[A_ADDR, 0n], [B_ADDR, 0n], [C_ADDR, 0n]]),
     txs: new Map(),
     logs: [], // {address, topics, data, blockNumber}
     codeBad: null,
@@ -364,13 +366,13 @@ function makeMockEvm(faults = {}, clock = { t: 0 }, opts = {}) {
     }
   }
 
-  const salesMain = salesContract({ treasury: A_ADDR, platformBps: 1000 })
-  const salesTest = salesContract({ treasury: A_ADDR, platformBps: 1000 })
+  const salesMain = salesContract({ treasury: T_ADDR, platformBps: 1000 })
+  const salesTest = salesContract({ treasury: T_ADDR, platformBps: 1000 })
   const registry = registryContract()
   const mailbox = mailboxContract()
   const contracts = new Map([[MAIN, salesMain], [TEST, salesTest], [REG, registry], [MBX, mailbox]])
 
-  const expectCode = (addr) => patchImmutablesMulti(artifactSales, { treasury: A_ADDR })
+  const expectCode = (addr) => patchImmutablesMulti(artifactSales, { treasury: T_ADDR })
 
   const mkClient = (rawAddr) => {
     const addr = getAddress(rawAddr) // viem account addresses are checksummed (apply compares from/seller against the same form)
@@ -487,8 +489,8 @@ function deployments() {
   return {
     'auto-evm-mainnet-paywall': { address: V1M, blockNumber: '50', deliveryTimeout: '259200', gracePeriod: '259200', treasury: A_ADDR },
     'auto-evm-mainnet-paywall-test': { address: V1T, blockNumber: '55', deliveryTimeout: '259200', gracePeriod: '259200', treasury: A_ADDR },
-    'auto-evm-mainnet-direct-sales': { address: MAIN, txHash: '0x' + '9'.repeat(64), blockNumber: '60', treasury: A_ADDR, platformBps: '1000' },
-    'auto-evm-mainnet-direct-sales-test': { address: TEST, txHash: '0x' + '8'.repeat(64), blockNumber: '62', treasury: A_ADDR, platformBps: '1000' },
+    'auto-evm-mainnet-direct-sales': { address: MAIN, txHash: '0x' + '9'.repeat(64), blockNumber: '60', treasury: T_ADDR, platformBps: '1000' },
+    'auto-evm-mainnet-direct-sales-test': { address: TEST, txHash: '0x' + '8'.repeat(64), blockNumber: '62', treasury: T_ADDR, platformBps: '1000' },
     'auto-evm-mainnet-v2': { address: REG },
     'auto-evm-mainnet-mailbox': { address: MBX, blockNumber: '40' },
   }
@@ -501,7 +503,9 @@ async function setup({ faults = {} } = {}) {
   const mockEvm = makeMockEvm(faults, clock, {})
   const runner = createRunner({
     A: mockEvm.mkClient(A_ADDR),
+    B: mockEvm.mkClient(B_ADDR),
     C: mockEvm.mkClient(C_ADDR),
+    T: mockEvm.mkClient(T_ADDR),
     abis: artifactSales.abi,
     mailboxAbis: mailboxArtifact.abi,
     registryAbi: REGISTRY_ABI,
@@ -562,7 +566,8 @@ test('S1 full first run (d1,d2,a) — single consensus submission + funds reconc
   assert(mockEvm.counts.rate === 3, `rate broadcasts ${mockEvm.counts.rate} ≠ 3 (d1 positive + switch to negative · a positive)`)
   assert(mockEvm.counts.refund === undefined && mockEvm.counts.withdraw === undefined, 'no refund/withdraw may exist (direct sales has no escrow)')
   assert(mockConsensus.submitCount() === 2, `consensus submission blocks ${mockConsensus.submitCount()} ≠ 2 (single submission)`)
-  assert(report.funds.A?.diff === '0' && report.funds.C?.diff === '0', `funds ledger not reconciled: A ${report.funds.A?.diff} / C ${report.funds.C?.diff}`)
+  assert(report.funds.A?.diff === '0' && report.funds.B?.diff === '0' && report.funds.C?.diff === '0' && report.funds.T?.diff === '0',
+    `funds ledger not reconciled: A ${report.funds.A?.diff} / B ${report.funds.B?.diff} / C ${report.funds.C?.diff} / T ${report.funds.T?.diff}`)
   assert(report.finishReserveUsed === false, 'the safe-finish reserve should not have been used')
   assert(mockEvm.state.balances.get(MAIN.toLowerCase()) === 0n && mockEvm.state.balances.get(TEST.toLowerCase()) === 0n, 'both instances contract balances should stay 0')
 })
@@ -629,7 +634,8 @@ test('S6 D2 rollback path standalone — zero purchase broadcasts, zero deals, f
   assert(exitCode === 0 && report.status === 'passed', `d2 did not pass: ${report.status} · ${report.gates.filter((g) => !g.pass).map((g) => `${g.name}(${g.detail})`).join('; ')}`)
   assert(mockEvm.counts.purchase === undefined, `the rollback path must not broadcast purchase: ${mockEvm.counts.purchase}`)
   assert(mockEvm.counts.createRevision === 2 && mockEvm.counts.delist === 1, `createRevision/delist broadcasts ${mockEvm.counts.createRevision}/${mockEvm.counts.delist} ≠ 2/1`)
-  assert(report.funds.A?.diff === '0' && report.funds.C?.diff === '0', `funds ledger not reconciled: A ${report.funds.A?.diff} / C ${report.funds.C?.diff}`)
+  assert(report.funds.A?.diff === '0' && report.funds.B?.diff === '0' && report.funds.C?.diff === '0' && report.funds.T?.diff === '0',
+    `funds ledger not reconciled: A ${report.funds.A?.diff} / B ${report.funds.B?.diff} / C ${report.funds.C?.diff} / T ${report.funds.T?.diff}`)
   assert(report.ordersCreated.length === 0, 'the rollback path has no deal orders')
 })
 
@@ -653,9 +659,9 @@ test('S9 partially executed paths — report says incomplete, never passed', asy
   mkdirSync(path.join(dir, 's9'), { recursive: true })
   writeFileSync(path.join(dir, 's9', 'input.json'), JSON.stringify({
     runId: 's9', suite: 'direct-sales-v1', commit: 'test-commit-0123456789', chainId: 870, instances: { main: MAIN, test: TEST },
-    registry: REG, mailbox: MBX, mailboxDeployBlock: 40, roles: { A: A_ADDR, C: C_ADDR },
+    registry: REG, mailbox: MBX, mailboxDeployBlock: 40, roles: { A: A_ADDR, B: B_ADDR, C: C_ADDR, T: T_ADDR },
     price: '0.01', cap: '0.2', capWei: String(2n * 10n ** 17n), paths: ['d1', 'a'],
-    baseline: { balanceA: String(5n * AI3), balanceC: String(1n * AI3), contractMain: '0', contractTest: '0' },
+    baseline: { balanceA: String(5n * AI3), balanceB: String(1n * AI3), balanceC: String(1n * AI3), balanceT: '0', contractMain: '0', contractTest: '0' },
   }))
   writeFileSync(path.join(dir, 's9', 'journal.json'), JSON.stringify({ runId: 's9', steps: [{ id: 'D1-list', state: 'planned' }], spend: { gas: '0', fees: '0', consensus: '0', escrow: '0' } }))
   const { report, exitCode } = await runner.reportOnly({ runId: 's9' })

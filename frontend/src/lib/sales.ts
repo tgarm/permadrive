@@ -32,6 +32,7 @@ import { t } from '../i18n/core.ts'
 
 const addrOk = (a: string) => /^0x[0-9a-fA-F]{40}$/.test(a) && !/^0x0{40}$/.test(a)
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000'
+const addrShaped = (v: unknown): v is string => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v)
 
 /** DirectSales instance address; null while unconfigured (before deployment / not set in Settings) */
 export const salesAddress = (): `0x${string}` | null => {
@@ -213,8 +214,15 @@ interface OrderStub {
 
 interface PersistedOrders {
   cursor: number // highest block scanned (inclusive); 0 = never scanned
+  checkpoint?: { height: number; hash: string } // block hash at cursor (reorg detection, same model as the Mailbox cursor)
   stubs: OrderStub[]
 }
+
+// Reorg lookback window (64 blocks, same as Mailbox): every sync rescans the
+// recent window; a checkpoint hash mismatch at the cursor height (upstream
+// reorg) falls back further — a bare incremental cursor misses orders / keeps
+// orphans across reorgs
+const RESCAN_LOOKBACK = 64
 
 const ordersCacheKey = (role: 'buyer' | 'seller', contract: string, account: string) =>
   `salesOrders:${role}:${contract.toLowerCase()}:${account.toLowerCase()}`
@@ -257,13 +265,33 @@ async function mergedStubs(role: 'buyer' | 'seller', filter: { buyer?: string; s
   const cacheKey = ordersCacheKey(role, contract, account)
   const persisted = (await getMeta<PersistedOrders>(cacheKey)) ?? { cursor: 0, stubs: [] }
   const latest = Number(await registryPublicClient().getBlockNumber())
-  const from = persisted.cursor > deployBlock ? persisted.cursor + 1 : deployBlock
+  let from = persisted.cursor > deployBlock ? persisted.cursor + 1 : deployBlock
+  // Checkpoint pairing: if the frozen block hash no longer matches the on-chain
+  // block at the same height, that range saw a reorg → roll the window back.
+  // With a matching hash we still only step forward (no steady-state rescan;
+  // deep reorgs beyond the window are out of scope, same as the Mailbox cursor).
+  if (persisted.cursor > deployBlock && persisted.checkpoint?.height === persisted.cursor && persisted.checkpoint.hash) {
+    try {
+      const cur = await registryPublicClient().getBlock({ blockNumber: BigInt(persisted.cursor) })
+      if (String(cur.hash).toLowerCase() !== persisted.checkpoint.hash.toLowerCase()) {
+        from = Math.max(deployBlock, persisted.cursor - RESCAN_LOOKBACK)
+      }
+    } catch { /* block read failure falls back to the regular window */ }
+  }
+  from = Math.max(deployBlock, from - RESCAN_LOOKBACK) // steady-state lookback (idempotent merge absorbs overlap)
   const fresh = from <= latest ? await scanPurchasedSales(filter, from, latest) : []
+  // Inside the window fresh wins (scanned stubs override; missing ones are
+  // dropped = reorged-away orphans); history outside the window is preserved
+  const freshIds = new Set(fresh.map((s) => String(s.orderId)))
   const byId = new Map<string, OrderStub>()
-  for (const s of persisted.stubs) byId.set(String(s.orderId), s)
+  for (const s of persisted.stubs) if (s.blockNumber < from || !freshIds.has(String(s.orderId))) byId.set(String(s.orderId), s)
   for (const s of fresh) byId.set(String(s.orderId), s)
   const stubs = [...byId.values()]
-  await putMeta(cacheKey, { cursor: latest, stubs } satisfies PersistedOrders)
+  let checkpoint: { height: number; hash: string } | undefined
+  try {
+    checkpoint = { height: latest, hash: String((await registryPublicClient().getBlock({ blockNumber: BigInt(latest) })).hash) }
+  } catch { /* a missing checkpoint only loses next round's reorg detection */ }
+  await putMeta(cacheKey, { cursor: latest, checkpoint, stubs } satisfies PersistedOrders)
   return stubs
 }
 
@@ -307,7 +335,8 @@ export async function fetchMyOrdersSales(me: string): Promise<SalesOrderRow[]> {
   for (const s of stubs) {
     const o = await getOrderSales(s.orderId)
     if (!o) continue
-    const entry = await entryByFileKey(o.seller, s.fileKey)
+    if (o.fileKey.toLowerCase() !== s.fileKey.toLowerCase()) continue // event fileKey ≠ on-chain order = dirty log/reorg residue, drop
+    const entry = await entryByFileKey(o.seller, o.fileKey) // look up by the on-chain order's fileKey (the event is only a cursor hint)
     rows.push({ orderId: s.orderId, seller: o.seller, buyer: o.buyer, provider: o.provider, price: o.price, state: o.state, entry })
   }
   return rows
@@ -322,7 +351,8 @@ export async function fetchSellerOrdersSales(seller: string): Promise<SalesOrder
     const o = await getOrderSales(s.orderId)
     if (!o || o.state !== 0) continue
     if (o.seller.toLowerCase() !== seller.toLowerCase()) continue // the order's snapshot seller must be self
-    const entry = await entryByFileKey(seller, s.fileKey)
+    if (o.fileKey.toLowerCase() !== s.fileKey.toLowerCase()) continue // same: drop dirty logs
+    const entry = await entryByFileKey(seller, o.fileKey)
     rows.push({ orderId: s.orderId, seller: o.seller, buyer: o.buyer, provider: o.provider, price: o.price, state: o.state, entry })
   }
   return rows
@@ -349,7 +379,16 @@ export interface PdGrantV3 {
 export const isPdGrantV3 = (plain: string): PdGrantV3 | null => {
   try {
     const v = JSON.parse(plain) as PdGrantV3
-    return v?.type === 'pdgrant' && v?.v === 3 && typeof v.manifestCid === 'string' && typeof v.wrappedK === 'string' ? v : null
+    // Full shape validation — a malformed/forged-shaped grant never becomes a
+    // delivery candidate (domain matching is done by the consumer's findGrant)
+    if (v?.type !== 'pdgrant' || v?.v !== 3) return null
+    if (typeof v.manifestCid !== 'string' || !v.manifestCid) return null
+    if (typeof v.wrappedK !== 'string' || !v.wrappedK) return null
+    if (typeof v.chainId !== 'number' || !Number.isFinite(v.chainId)) return null
+    if (!addrShaped(v.sales) || !addrShaped(v.buyer) || !addrShaped(v.seller)) return null
+    if (typeof v.orderId !== 'string' || !/^\d+$/.test(v.orderId)) return null
+    if (v.provider !== undefined && !addrShaped(v.provider)) return null
+    return v
   } catch {
     return null
   }

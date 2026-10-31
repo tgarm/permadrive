@@ -6,6 +6,7 @@ import { useState } from 'react'
 import { useChain } from '../chain-context'
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type AppConfig } from '../lib/config'
 import { useI18n } from '../i18n'
+import { ChainTag } from '../components/ChainTag'
 
 export function SettingsPage() {
   const { t } = useI18n()
@@ -34,11 +35,15 @@ export function SettingsPage() {
         <h2>{t('settings.networkTitle')}</h2>
         <p className="muted">{t('settings.networkIntro')}</p>
         <label className="field">
-          <span>{t('settings.rpcLabel')}</span>
+          <span>
+            <ChainTag chain="consensus" /> {t('settings.rpcLabel')}
+          </span>
           <input value={form.rpcUrl} onChange={(e) => setForm({ ...form, rpcUrl: e.target.value })} spellCheck={false} />
         </label>
         <label className="field">
-          <span>{t('settings.indexerLabel')}</span>
+          <span>
+            <ChainTag chain="consensus" /> {t('settings.indexerLabel')}
+          </span>
           <input value={form.indexerUrl} onChange={(e) => setForm({ ...form, indexerUrl: e.target.value })} spellCheck={false} />
         </label>
         <label className="field">
@@ -52,23 +57,33 @@ export function SettingsPage() {
           />
         </label>
         <label className="field">
-          <span>{t('settings.evmRpcLabel')}</span>
+          <span>
+            <ChainTag chain="evm" /> {t('settings.evmRpcLabel')}
+          </span>
           <input value={form.evmRpcUrl} onChange={(e) => setForm({ ...form, evmRpcUrl: e.target.value })} spellCheck={false} />
         </label>
         <label className="field">
-          <span>{t('settings.registryLabel')}</span>
+          <span>
+            <ChainTag chain="evm" /> {t('settings.registryLabel')}
+          </span>
           <input value={form.registryAddress} onChange={(e) => setForm({ ...form, registryAddress: e.target.value })} spellCheck={false} />
         </label>
         <label className="field">
-          <span>{t('settings.paywallLabel')}</span>
+          <span>
+            <ChainTag chain="evm" /> {t('settings.paywallLabel')}
+          </span>
           <input value={form.paywallAddress} onChange={(e) => setForm({ ...form, paywallAddress: e.target.value })} spellCheck={false} />
         </label>
         <label className="field">
-          <span>{t('settings.paywallV2Label')}</span>
+          <span>
+            <ChainTag chain="evm" /> {t('settings.paywallV2Label')}
+          </span>
           <input value={form.paywallV2Address} onChange={(e) => setForm({ ...form, paywallV2Address: e.target.value })} spellCheck={false} />
         </label>
         <label className="field">
-          <span>{t('settings.salesLabel')}</span>
+          <span>
+            <ChainTag chain="evm" /> {t('settings.salesLabel')}
+          </span>
           <input value={form.salesAddress} onChange={(e) => setForm({ ...form, salesAddress: e.target.value })} spellCheck={false} />
         </label>
         <div className="row">

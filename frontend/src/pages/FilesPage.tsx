@@ -47,6 +47,7 @@ import {
 } from '../lib/store'
 import { dismissPendingPublish, listPendingPublish, verifyPublishTask } from '../lib/publish'
 import { saveBlob } from '../lib/download'
+import { ChainTag } from '../components/ChainTag'
 import { PaywallSection } from './PaywallSection'
 import { SalesSection } from './SalesSection'
 import { salesActive } from '../lib/sales'
@@ -544,7 +545,9 @@ export function FilesPage() {
                   <span>{t('files.nodesOnChain', [nodeCount(upload.prepared.nodes.length), formatBytes(upload.prepared.totalBytes)])}</span>
                 </div>
                 <div className="kv fee">
-                  <span>{t('files.feeEstimate')}</span>
+                  <span>
+                    <ChainTag chain="consensus" /> {t('files.feeEstimate')}
+                  </span>
                   <span>≈ {upload.fee.ai3.toFixed(4)} AI3</span>
                 </div>
                 {upload.encrypt && (

@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { useWallet } from '@autonomys/auto-wallet-react'
 import type { Signer } from '@polkadot/api/types'
 import { useSigner } from '../signer-context'
+import { ChainTag } from './ChainTag'
 import { createLocalSigner } from '../lib/wallet/local-keyring'
 import { createLocalEvmSigner } from '../lib/wallet/local-evm'
 import { connectInjectedEvm, hasInjectedEvm } from '../lib/wallet/injected-evm'
@@ -88,7 +89,11 @@ export function WalletBar() {
   return (
     <div className="wallet-bar">
       <div className="wallet-section">
-        <div className="wallet-section-title">{t('wallet.substrateTitle')}</div>
+        {/* chain color rule: consensus = teal, EVM = violet — the two wallet
+            columns are distinguishable at a glance */}
+        <div className="wallet-section-title">
+          <ChainTag chain="consensus" /> {t('wallet.substrateTitle')}
+        </div>
         {!wallet.isConnected ? (
           wallet.availableWallets.length === 0 ? (
             <span className="muted">{t('wallet.noExtension')}</span>
@@ -126,7 +131,9 @@ export function WalletBar() {
       </div>
 
       <div className="wallet-section">
-        <div className="wallet-section-title">{t('wallet.registryTitle')}</div>
+        <div className="wallet-section-title">
+          <ChainTag chain="evm" /> {t('wallet.registryTitle')}
+        </div>
         {evm ? (
           <div className="wallet-connected">
             <span className="mono">
@@ -198,15 +205,16 @@ export function WalletBar() {
         </div>
       )}
 
-      <div className={`active-signer ${active ? 'on' : ''}`}>
-        {active || evm
-          ? [
-              active ? t('wallet.substrateLabel', [signerName(active.label), active.address.slice(0, 10) + '…']) : null,
-              evm ? t('wallet.evmLabel', [signerName(evm.label), evm.address.slice(0, 8) + '…']) : null,
-            ]
-              .filter(Boolean)
-              .join(' ｜ ')
-          : t('wallet.noSigner')}
+      <div className={`active-signer ${active || evm ? 'on' : ''}`}>
+        {!active && !evm
+          ? t('wallet.noSigner')
+          : (
+            <>
+              {active && <span className="txt-consensus">{t('wallet.substrateLabel', [signerName(active.label), active.address.slice(0, 10) + '…'])}</span>}
+              {active && evm && ' ｜ '}
+              {evm && <span className="txt-evm">{t('wallet.evmLabel', [signerName(evm.label), evm.address.slice(0, 8) + '…'])}</span>}
+            </>
+          )}
       </div>
     </div>
   )

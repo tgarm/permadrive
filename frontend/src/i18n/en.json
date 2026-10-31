@@ -33,12 +33,14 @@
     "nVersions": "{0} versions",
     "oneNode": "1 node",
     "nNodes": "{0} nodes",
-    "storageFeeEstimate": "On-chain storage fee (estimate)",
+    "storageFeeEstimate": "Storage fee (consensus chain, est.)",
     "registryDevFee": "Registry dev fee",
     "signAndPublish": "Sign and publish",
     "oneOnChainVersion": "1 on-chain version",
     "nOnChainVersions": "{0} on-chain versions",
-    "ok": "OK"
+    "ok": "OK",
+    "chainConsensus": "Consensus",
+    "chainEvm": "EVM"
   },
   "stage": {
     "packing": "Packing locally (IPLD chunking)…",
@@ -67,9 +69,9 @@
     "aria": "Toggle color scheme"
   },
   "wallet": {
-    "substrateTitle": "Wallet (Substrate)",
+    "substrateTitle": "Wallet · Substrate extension",
     "noExtension": "No wallet extension detected (Talisman / SubWallet / Polkadot.js)",
-    "registryTitle": "On-chain registry (EVM · Auto-EVM mainnet)",
+    "registryTitle": "Registry · EVM contracts",
     "connectEvm": "Connect browser EVM wallet",
     "noEvmExtension": "No EVM wallet extension detected — Local key (dev) is available",
     "devToggle": "Local key (dev)",
@@ -79,7 +81,7 @@
     "useBoth": "Use (Substrate + EVM)",
     "clear": "Clear",
     "noSigner": "No active signer",
-    "substrateLabel": "Substrate: {0} · {1}",
+    "substrateLabel": "Consensus: {0} · {1}",
     "evmLabel": "EVM: {0} · {1}",
     "evmSuffix": " (EVM)",
     "labelLocal": "Local key (dev)",
@@ -311,7 +313,7 @@
   "settings": {
     "networkTitle": "Network & endpoints",
     "networkIntro": "Manifests only record the network identifier (mainnet); endpoints are this app's configuration — switching endpoints does not affect retrieving existing files. Public RPC endpoints rate-limit; the default minimum interval between consecutive requests is ≥1.6s.",
-    "rpcLabel": "Consensus chain RPC (HTTP)",
+    "rpcLabel": "RPC node (HTTP)",
     "indexerLabel": "object-mapping indexer (WSS)",
     "intervalLabel": "Minimum RPC request interval (ms)",
     "evmRpcLabel": "Auto-EVM RPC (on-chain registry)",
@@ -478,7 +480,7 @@
     "legacyListFrozen": "Listing is disabled while the v1 contract is frozen — available after PaywallV2 deployment.",
     "legacyFrozenShort": "v1 frozen",
     "legacyConfirmRisk": "Legacy orders settle to the CURRENT listing seller on the frozen v1 contract. The pre-confirm check cannot fully rule out an overwrite between the check and the transaction (TOCTOU) — for high-value orders, refund is the safer option.",
-    "confirmExplain": "Confirm receipt and release payment to the seller? This transaction costs gas. After confirmation this order cannot be refunded."
+    "confirmExplain": "Confirm receipt and release payment to the seller? This EVM transaction costs Auto-EVM gas; after confirmation the order cannot be refunded."
   },
   "publishPending": {
     "title": "{0} publish result(s) pending verification",
@@ -495,7 +497,7 @@
   },
   "sales": {
     "title": "Direct sales",
-    "notice": "Direct-sales mode: payment goes straight to the seller in the same transaction (10% platform fee) — there is no escrow and NO platform refund. Delivery is manual: the seller delivers the file key when online. Buying grants the file itself (no DRM). Only encrypted files make sense to sell. Rate honestly: up/down votes are on-chain (gas applies), one vote per buyer per product, changeable.",
+    "notice": "Direct sales: payment goes straight to the seller in the same Auto-EVM transaction (10% platform fee included) — no escrow, no platform refunds. Delivery is manual: the seller sends the file key via on-chain private message when online. Buying grants the file itself (no DRM). Only encrypted files make sense. Please rate honestly: up/down votes are on-chain (Auto-EVM gas applies), one vote per item per address, editable.",
     "connectFirst": "Connect a wallet to use direct sales.",
     "myListings": "My listings (seller)",
     "selectEntry": "File",
@@ -516,7 +518,7 @@
     "view": "View",
     "viewEmpty": "No registry entries for this address.",
     "buy": "Buy",
-    "buyConfirm": "Buy for {0} AI3?\n\nThis pays the seller DIRECTLY in one transaction (plus gas). There is NO platform refund — delivery depends on the seller being online. Continue?",
+    "buyConfirm": "Buy for {0} AI3?\n\nPayment goes directly to the seller in this EVM transaction (plus Auto-EVM gas). The platform offers no refunds — receiving the key depends on the seller being online to deliver. Continue?",
     "purchasedOk": "Purchased \"{0}\" for {1} AI3 — waiting for the seller to deliver the key.",
     "notListed": "Not listed (or listing changed) — refresh the directory.",
     "myOrders": "My orders (buyer)",
@@ -529,9 +531,16 @@
     "waitingDelivery": "Key not delivered yet — the seller delivers when online. Check again later.",
     "rateUp": "Helpful",
     "rateDown": "Not as described",
-    "rateConfirm": "Record this vote on-chain? The transaction costs gas. One vote per buyer per product; voting again replaces it.",
+    "rateConfirm": "Record this rating on-chain? This EVM transaction costs Auto-EVM gas. One vote per item per address; rating again overwrites the previous vote.",
     "ratedOk": "Vote recorded ({0}).",
     "ratingLine": "👍 {0} · 👎 {1} · {2} buyers",
-    "noRatings": "No ratings yet"
+    "noRatings": "No ratings yet",
+    "receiveKeyMismatch": "This wallet's receiving key does not match the one announced on-chain (you may have switched wallet implementations). To avoid paying without being able to receive the delivery, re-enable receiving on the Messages page first (it publishes this wallet's encryption key), then come back to buy.",
+    "syncingInbox": "Syncing inbox and decrypting key messages…",
+    "inboxSynced": "Inbox synced.",
+    "syncInbox": "Check inbox",
+    "syncInboxHint": "Sync the on-chain inbox and decrypt delivery keys from the seller (EVM side; decrypt prompts come from your wallet)",
+    "ratingFailed": "Failed to load ratings (click View to retry)",
+    "rateNoOp": "You already cast this vote on this item — nothing changed. Service attribution stays with the original order and does not migrate to a newer one."
   }
 }

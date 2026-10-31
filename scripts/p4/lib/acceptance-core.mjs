@@ -12,7 +12,9 @@
 //
 // This file contains no endpoints and no key loading: every chain access is injected
 // via createRunner(deps) —
-//   deps.A / deps.C                 client objects (address + account + publicClient + walletClient)
+//   deps.A / deps.B / deps.C / deps.T   client objects (address + account + publicClient + walletClient)
+//                                      (roles separated: A=seller B=buyer-one C=buyer-two T=treasury;
+//                                      T is read-only; deployer F stays out of the runner)
 //   deps.abis / mailboxAbis / registryAbi   the three ABIs (abis = DirectSales)
 //   deps.artifactSales              DirectSales build artifact (for on-chain code comparison)
 //   deps.deployments                parsed contracts/deployments.json
@@ -43,11 +45,11 @@
 //  4. Consensus publishing performs exactly one author.submitExtrinsic (the wait side,
 //     awaitConfirmed, only scans blocks and never resends); submit errors / scan timeouts
 //     → unknown halt; no per-tx degradation (unknown results never auto-degrade).
-//  5. Full-amount assertion baseline = a snapshot taken immediately before the tx send
-//     (balance + block number); the assertion always runs — fresh uses the snapshot,
-//     resume recomputes via the historical-block method; if the RPC cannot serve
-//     historical balances → pendingVerify and finish refuses "passed" (never skip an
-//     assertion and still claim success).
+//  5. (Escrow era: the tight-snapshot full-amount assertion for refunds/withdrawals
+//     retired with the direct-sales rework — there is no refund path. Replaced by the
+//     four-role funds ledger (see the funds note below) plus per-purchase split
+//     assertions; finish rejects any role whose expected ≠ actual, never skipping an
+//     assertion and still claiming success.)
 //  6. checkCap = gas + fees + consensus + this write's estimate + open-tx estimates;
 //     safe-finish steps (delist etc.) have a separate FINISH_RESERVE whose use is
 //     recorded in the report.
@@ -57,10 +59,11 @@
 //     turns codeMatch/log-scan gaps/balance diffs/offline tests into hard gates.
 //     Inventory reads all pin the same blockNumber to avoid mixed time points.
 //
-// Funds ledger (journal.flow[actor]): every confirmed tx records { step, out, in }
-// (out includes gas plus this tx's value/fee; in is on-chain inflow to that actor);
-// fee deltas are tied to txStep's costed transition (idempotent — resume re-entry
-// never double-counts). finish reconciles per role:
+// Funds ledger (journal.flow[actor], actor ∈ A/B/C/T): every confirmed tx records
+// { step, out, in } (out includes gas plus this tx's value/fee; in is on-chain inflow
+// to that actor); a purchase's platform fee / seller net are credited to T and A via
+// extraCredits; fee deltas are tied to txStep's costed transition (idempotent —
+// resume re-entry never double-counts). finish reconciles all four roles:
 // "expected = baseline − Σout + Σin" must equal the actual balance exactly.
 //
 // Record directory <OUT_BASE>/<runId>/ (covered by the .gitignore out/ rule):
@@ -109,7 +112,7 @@ import { fromHex } from '../../../frontend/src/lib/bytes.ts'
 // ---------- constants & utilities ----------
 
 export const PRICE_DEFAULT = '0.01'
-export const CAP_DEFAULT = '0.1' // covers the purchases + dev fee + consensus byte fee + safe-finish reserve
+export const CAP_DEFAULT = '0.1' // covers 2 purchases + dev fee + consensus byte fee + gas + safe-finish reserve
 export const CHAIN_ID_EXPECTED = 870
 // suite marker: a DirectSales-dedicated suite, isolated from the escrow-era run
 // records; input.json freezes the suite and resume rejects a mismatch outright
@@ -212,7 +215,8 @@ export function createRunner(deps) {
     journal.assertions ??= {}
     journal.pathResults ??= {}
     journal.balances ??= {}
-    journal.flow ??= { A: [], C: [] }
+    journal.flow ??= {}
+    for (const k of ['A', 'B', 'C', 'T']) journal.flow[k] ??= []
     journal.pendingVerify ??= []
     journal.finishReserveUsed = Boolean(journal.finishReserveUsed)
     return { id, dir, input, journal }
@@ -253,14 +257,21 @@ export function createRunner(deps) {
 
   // ---------- signers & contract helpers ----------
 
+  // Roles separated (A/B/C/T): A=seller (also Registry registrant / consensus
+  // publisher — but no longer the platform payee), B=buyer one (path D1),
+  // C=buyer two (path A / unauthorized actor), T=platform payee (read-only,
+  // never signs). F (deployer) stays out of the runner.
   const A = deps.A
+  const B = deps.B
   const C = deps.C
+  const T = deps.T
+  const ROLE_CLIENTS = { A, B, C, T }
+  const ROLE_KEYS = { A: 'balanceA', B: 'balanceB', C: 'balanceC', T: 'balanceT' }
   const abis = deps.abis
   const mailboxAbis = deps.mailboxAbis
   const registryAbi = deps.registryAbi
 
   const bal = (c) => withRetry(() => c.publicClient.getBalance({ address: c.address }))
-  const balAt = (c, blockNumber) => withRetry(() => c.publicClient.getBalance({ address: c.address, blockNumber }))
 
   const v2read = (c, addr, fn, args = []) =>
     withRetry(() => c.publicClient.readContract({ address: addr, abi: abis, functionName: fn, args }))
@@ -428,8 +439,11 @@ export function createRunner(deps) {
         const into = opts.credit ? opts.credit(rx) : 0n
         RUN.journal.flow[opts.actor].push({ step: s.id, out: out.toString(), in: into.toString() })
       }
-      if (opts.extraCredit) {
-        RUN.journal.flow[opts.extraCredit.actor].push({ step: `${s.id}(extra)`, out: '0', in: opts.extraCredit.amount(rx).toString() })
+      if (opts.extraCredits) {
+        // split accounting: one purchase can credit several roles (fee → T, net → A)
+        for (const ec of opts.extraCredits) {
+          RUN.journal.flow[ec.actor].push({ step: `${s.id}(extra)`, out: '0', in: ec.amount(rx).toString() })
+        }
       }
       s.costed = true
       syncSpend()
@@ -531,67 +545,6 @@ export function createRunner(deps) {
     }
   }
 
-  /** Tight baseline snapshot (balance + block number): anchor for full-amount
-   *  assertions. Captured only while the step is still planned; resume never
-   *  overwrites a historical snapshot. Returns true when captured fresh in this
-   *  process. */
-  async function snapshotBefore(stepId, actor, slot) {
-    const s = step(stepId)
-    if (s.freshSnapshot !== undefined) return s.freshSnapshot
-    if (s.state !== 'planned') {
-      s.freshSnapshot = false
-      return false
-    }
-    RUN.journal.balances[actor] ??= {}
-    RUN.journal.balances[actor][slot] = {
-      balance: String(await bal(actor === 'A' ? A : C)),
-      block: Number(await withRetry(() => (actor === 'A' ? A : C).publicClient.getBlockNumber())),
-    }
-    s.freshSnapshot = true
-    jwrite('journal.json', RUN.journal)
-    return true
-  }
-
-  /** Full-amount assertion: fresh uses the tight snapshot; resume recomputes via the
-   *  historical-block method (snapshot block → receipt block, immune to later txs);
-   *  if historical balances are unavailable → pendingVerify (finish refuses passed).
-   *  The assertion ALWAYS runs. */
-  async function assertExactCredit(check, { actor, slot, refundStep, expected, creditIn, localFresh = false }) {
-    const s = step(refundStep)
-    if (s.state !== 'checked') return
-    const rx = s.receipt
-    const gas = BigInt(rx?.gasUsed ?? '0') * BigInt(rx?.effectiveGasPrice ?? '0')
-    const snap = RUN.journal.balances?.[actor]?.[slot]
-    if (!snap?.balance || !snap?.block) {
-      check(false, `${refundStep} tight baseline missing (corrupt record)`)
-      return
-    }
-    const client = actor === 'A' ? A : C
-    let before, after, mode
-    if (localFresh) {
-      // fresh: the assertion runs immediately after the tx confirms, and this actor
-      // has made no later txs yet → snapshot + live balance
-      before = BigInt(snap.balance)
-      after = await bal(client)
-      mode = 'tight snapshot'
-    } else {
-      // resume: later txs may exist after the snapshot (e.g. other paths finished in
-      // the same process) — always redo the historical-block method
-      // (snapshot block → receipt block), immune to later txs
-      try {
-        before = await balAt(client, BigInt(snap.block))
-        after = await balAt(client, BigInt(rx.blockNumber))
-        mode = `historical blocks (#${snap.block}→#${rx.blockNumber})`
-      } catch (e) {
-        pushPendingVerify(refundStep)
-        check(true, `${refundStep} full-amount assertion → pendingVerify (historical balance RPC unavailable, verify manually)`, 'finish will not report passed')
-        return
-      }
-    }
-    const delta = after - before + gas - (creditIn ?? 0n)
-    check(delta === expected, `${refundStep} full-amount assertion (${mode}): balance delta + gas − inflow = expected`, `diff ${ai3(delta - expected)}`)
-  }
-
   /** Wait for on-chain time: prints every 15s; beyond 30min persists nextEligibleAt
    *  and exits (code 3) for resume */
   async function waitUntil(s, epochMs) {
@@ -672,32 +625,40 @@ export function createRunner(deps) {
     const lid = encodePackedAddr(A.address, fileKey)
 
     await txStep(step('D1-list'), A, { to: testAddr, abi: abis, fn: 'createRevision', args: [fileKey, price, ...SELLER_MODE_ARGS()] }, { actor: 'A' })
+    let pbpsD1 = 1000
     if (isFresh('D1-delist')) {
       const rid = await v2read(A, testAddr, 'currentRevision', [lid])
       check(rid === 1n, 'D1 listing readback (currentRevision=1, seller namespace)')
       const rev = await v2read(A, testAddr, 'revisionOf', [lid, rid])
-      check(BigInt(rev[0]) === price && Number(rev[2]) === 1000 && Number(rev[4]) === 0, 'D1 revision snapshot: price/platformBps=1000/deliveryMode=0 (Seller)')
+      pbpsD1 = Number(rev[2])
+      check(BigInt(rev[0]) === price && pbpsD1 === 1000 && Number(rev[4]) === 0, 'D1 revision snapshot: price/platformBps=1000/deliveryMode=0 (Seller)')
     }
+    // Split accounting basis: fee → T, net → A; the rate comes from the revision snapshot
+    const feeD1 = (price * BigInt(pbpsD1)) / 10_000n
 
-    await txStep(step('D1-announce'), C, { to: RUN.input.mailbox, abi: mailboxAbis, fn: 'announceEncryptionKey', args: [] }, { actor: 'C', pre: precheckAnnounce })
+    await txStep(step('D1-announce'), B, { to: RUN.input.mailbox, abi: mailboxAbis, fn: 'announceEncryptionKey', args: [] }, { actor: 'B', pre: precheckAnnounce })
 
     const d1fresh = isFresh('D1-purchase')
     const orderId = BigInt(
-      await txStep(step('D1-purchase'), C, { to: testAddr, abi: abis, fn: 'purchase', args: [lid, 1n, price, 2000, 5000], value: price },
-        { actor: 'C', parse: (rx) => orderIdFromReceipt(rx), extraCredit: { actor: 'A', amount: () => price } }),
+      await txStep(step('D1-purchase'), B, { to: testAddr, abi: abis, fn: 'purchase', args: [lid, 1n, price, 2000, 5000], value: price },
+        { actor: 'B', parse: (rx) => orderIdFromReceipt(rx), extraCredits: [{ actor: 'A', amount: () => price - feeD1 }, { actor: 'T', amount: () => feeD1 }] }),
     )
     const o = await orderOf(A, testAddr, orderId)
     if (d1fresh) {
-      check(o.state === 0 && o.price === price && o.seller === A.address && o.buyer === C.address && o.platformBps === 1000 && o.provider === '0x0000000000000000000000000000000000000000',
+      check(o.state === 0 && o.price === price && o.seller === A.address && o.buyer === B.address && o.platformBps === 1000 && o.provider === '0x0000000000000000000000000000000000000000',
         `D1 order(${orderId}) snapshot complete (Paid, Seller mode)`)
+      // per-purchase split assertion: fee/net with Σ = price; the ledger's
+      // extraCredits share the same numbers and finish reconciles real balances
+      check(feeD1 + (price - feeD1) === price && o.platformBps === pbpsD1,
+        `D1 split accounting (fee ${ai3(feeD1)} → T · net ${ai3(price - feeD1)} → A, Σ=price)`)
       check((await withRetry(() => A.publicClient.getBalance({ address: testAddr }))) === 0n, 'D1 contract balance 0 after purchase (pay-and-split, no escrow)')
     }
 
     // Delivery: pdgrant v3 (ciphertext rides the Mailbox E2E channel) + markKeySent (optional registration)
     const K = deterministicSample(32) // deterministic test key (no real file needed; full retrieval+decryption is covered by path A)
     const precheckGrant = async (c, call) => {
-      const kpC = await localBoxKeypair(signWith(C), C.address)
-      const inner = boxEncrypt(kpC.publicKey, K)
+      const kpB = await localBoxKeypair(signWith(B), B.address)
+      const inner = boxEncrypt(kpB.publicKey, K)
       const grant = {
         type: 'pdgrant',
         manifestCid: `test-${RUN.id}-D1`, // the test path has no real manifest; a placeholder identity for binding validation
@@ -706,12 +667,12 @@ export function createRunner(deps) {
         chainId: CHAIN_ID_EXPECTED,
         sales: testAddr,
         orderId: String(orderId),
-        buyer: C.address.toLowerCase(),
+        buyer: B.address.toLowerCase(),
         seller: A.address.toLowerCase(),
       }
       // Same as the frontend sendEncryptedMessage: on-chain content = boxEnvelope(pdgrant JSON)
-      const envelope = boxEncrypt(kpC.publicKey, new TextEncoder().encode(JSON.stringify(grant)))
-      call.args = [C.address, serializeEnvelope(envelope)]
+      const envelope = boxEncrypt(kpB.publicKey, new TextEncoder().encode(JSON.stringify(grant)))
+      call.args = [B.address, serializeEnvelope(envelope)]
       return false
     }
     await txStep(step('D1-send-grant'), A, { to: RUN.input.mailbox, abi: mailboxAbis, fn: 'send', args: [] }, { actor: 'A', pre: precheckGrant })
@@ -726,14 +687,14 @@ export function createRunner(deps) {
       const s = step('D1-receive-grant')
       if (s.state !== 'checked') {
         setStep(s, 'submitted')
-        const kpC = await localBoxKeypair(signWith(C), C.address)
-        const fromBlock = Math.max(RUN.input.mailboxDeployBlock, Number(await withRetry(() => C.publicClient.getBlockNumber())) - 400)
-        const latest = Number(await withRetry(() => C.publicClient.getBlockNumber()))
+        const kpB = await localBoxKeypair(signWith(B), B.address)
+        const fromBlock = Math.max(RUN.input.mailboxDeployBlock, Number(await withRetry(() => B.publicClient.getBlockNumber())) - 400)
+        const latest = Number(await withRetry(() => B.publicClient.getBlockNumber()))
         const logs = []
         for (let start = fromBlock; start <= latest; start += 10_000) {
           const part = await withRetry(() =>
-            C.publicClient.getLogs({
-              address: RUN.input.mailbox, event: MSG_SENT, args: { to: C.address },
+            B.publicClient.getLogs({
+              address: RUN.input.mailbox, event: MSG_SENT, args: { to: B.address },
               fromBlock: BigInt(start), toBlock: BigInt(Math.min(start + 9_999, latest)),
             }),
           )
@@ -744,13 +705,13 @@ export function createRunner(deps) {
           if (l.args.from?.toLowerCase() !== A.address.toLowerCase()) continue
           let g
           try {
-            g = JSON.parse(new TextDecoder().decode(boxDecryptWithSecretKey(parseEnvelope(l.args.content), kpC.secretKey)))
+            g = JSON.parse(new TextDecoder().decode(boxDecryptWithSecretKey(parseEnvelope(l.args.content), kpB.secretKey)))
           } catch {
             continue // someone else's ciphertext / non-JSON, skip
           }
           if (g?.type !== 'pdgrant' || g.v !== GRANT_V) continue
           if (String(g.sales).toLowerCase() !== testAddr.toLowerCase() || String(g.orderId) !== String(orderId)) continue
-          if (String(g.buyer).toLowerCase() !== C.address.toLowerCase() || String(g.seller).toLowerCase() !== A.address.toLowerCase()) continue
+          if (String(g.buyer).toLowerCase() !== B.address.toLowerCase() || String(g.seller).toLowerCase() !== A.address.toLowerCase()) continue
           found = g
           break
         }
@@ -758,7 +719,7 @@ export function createRunner(deps) {
           setStep(s, 'failed', { error: 'inbox has no pdgrant whose v3 bindings all match' })
           throw new Exit(1, 'D1 no matching pdgrant found')
         }
-        const Kb = boxDecryptWithSecretKey(parseEnvelope(found.wrappedK), kpC.secretKey)
+        const Kb = boxDecryptWithSecretKey(parseEnvelope(found.wrappedK), kpB.secretKey)
         if (Buffer.compare(Buffer.from(Kb), Buffer.from(K)) !== 0) {
           setStep(s, 'failed', { error: 'unwrapped K differs from the seller side' })
           throw new Exit(1, 'D1 key-grade download check failed (K mismatch)')
@@ -769,13 +730,13 @@ export function createRunner(deps) {
 
     // Rating: positive → switch to negative (subtract first, then add; no stacking); gas paid by the rater
     const dRateFresh = isFresh('D1-rate-up')
-    await txStep(step('D1-rate-up'), C, { to: testAddr, abi: abis, fn: 'rate', args: [orderId, true] }, { actor: 'C' })
+    await txStep(step('D1-rate-up'), B, { to: testAddr, abi: abis, fn: 'rate', args: [orderId, true] }, { actor: 'B' })
     if (dRateFresh) {
       const [up, down, buyers] = await v2read(A, testAddr, 'ratingOf', [lid])
       check(BigInt(up) === 1n && BigInt(down) === 0n && BigInt(buyers) === 1n, 'D1 positive rating: up=1/down=0/distinct buyers=1')
     }
     const dSwitchFresh = isFresh('D1-rate-switch')
-    await txStep(step('D1-rate-switch'), C, { to: testAddr, abi: abis, fn: 'rate', args: [orderId, false] }, { actor: 'C' })
+    await txStep(step('D1-rate-switch'), B, { to: testAddr, abi: abis, fn: 'rate', args: [orderId, false] }, { actor: 'B' })
     if (dSwitchFresh) {
       const [up, down] = await v2read(A, testAddr, 'ratingOf', [lid])
       check(BigInt(up) === 0n && BigInt(down) === 1n, 'D1 switch to negative: old vote subtracted before the new one added (up=0/down=1, no stacking)')
@@ -944,7 +905,7 @@ export function createRunner(deps) {
             return (ev?.args?.amount ?? 0n) + BigInt(rx.gasUsed) * BigInt(rx.effectiveGasPrice)
           },
           feesOut: (rx) => eventsOf(rx, registryAbi).find((e) => e.eventName === 'FeePaid')?.args?.amount ?? 0n,
-          ...(feeReturnsToA ? { extraCredit: { actor: 'A', amount: (rx) => eventsOf(rx, registryAbi).find((e) => e.eventName === 'FeePaid')?.args?.amount ?? 0n } } : {}),
+          ...(feeReturnsToA ? { extraCredits: [{ actor: 'A', amount: (rx) => eventsOf(rx, registryAbi).find((e) => e.eventName === 'FeePaid')?.args?.amount ?? 0n }] } : {}),
         },
       ),
     )
@@ -954,11 +915,15 @@ export function createRunner(deps) {
     const keyA = keccak256(toHex(manifestCid))
     const lidA = encodePackedAddr(A.address, keyA)
     await txStep(step('A5-list'), A, { to: mainAddr, abi: abis, fn: 'createRevision', args: [keyA, price, ...SELLER_MODE_ARGS()] }, { actor: 'A' })
+    let pbpsA = 1000
     const a5fresh = isFresh('A15-delist') // A15 checked ⇒ already delisted, the readback must be 0
     if (a5fresh) {
       const rid = await v2read(A, mainAddr, 'currentRevision', [lidA])
       check(rid === 1n, 'A5 production listing readback (currentRevision=1)')
+      pbpsA = Number((await v2read(A, mainAddr, 'revisionOf', [lidA, rid]))[2])
     }
+    // Split accounting basis: fee → T, net → A; the rate comes from the revision snapshot
+    const feeA = (price * BigInt(pbpsA)) / 10_000n
 
     // A6 buyer announces its encryption key (idempotent: zero txs if already registered)
     await txStep(step('A6-announce-buyer'), C, { to: RUN.input.mailbox, abi: mailboxAbis, fn: 'announceEncryptionKey', args: [] }, { actor: 'C', pre: precheckAnnounce })
@@ -972,14 +937,18 @@ export function createRunner(deps) {
     await txStep(
       s7, C,
       { to: mainAddr, abi: abis, fn: 'purchase', args: [lidA, ridA, price, 2000, 5000], value: price },
-      { actor: 'C', parse: (rx) => ({ orderId: String(orderIdFromReceipt(rx)), block: Number(rx.blockNumber) }), extraCredit: { actor: 'A', amount: () => price } },
+      { actor: 'C', parse: (rx) => ({ orderId: String(orderIdFromReceipt(rx)), block: Number(rx.blockNumber) }), extraCredits: [{ actor: 'A', amount: () => price - feeA }, { actor: 'T', amount: () => feeA }] },
     )
     const orderIdA = BigInt(s7.result.orderId)
     const oA = await orderOf(A, mainAddr, orderIdA)
     if (a7fresh) {
       check(oA.state === 0 && oA.seller === A.address && oA.buyer === C.address, `A7 order(${orderIdA}) Paid, cross-address snapshot correct`)
       check(oA.price === price && oA.platformBps === 1000 && oA.provider === '0x0000000000000000000000000000000000000000', 'A7 price/platform-fee snapshot correct (Seller mode)')
-      check((await withRetry(() => A.publicClient.getBalance({ address: mainAddr }))) === 0n, 'A7 contract balance 0 after purchase (pay-and-split: platform fee + net land on A immediately)')
+      // per-purchase split assertion (fee → T, net → A); the ledger's extraCredits
+      // share the same numbers and finish reconciles all four role balances
+      check(feeA + (price - feeA) === price && oA.platformBps === pbpsA,
+        `A7 split accounting (fee ${ai3(feeA)} → T · net ${ai3(price - feeA)} → A, Σ=price)`)
+      check((await withRetry(() => A.publicClient.getBalance({ address: mainAddr }))) === 0n, 'A7 contract balance 0 after purchase (pay-and-split: fee → T + net → A immediately)')
     }
 
     // A8 pdgrant delivery: unwrap K → wrap with the buyer's key → v3 binding
@@ -1182,7 +1151,9 @@ export function createRunner(deps) {
       fundsPass = false
       fundsDetail = `open/failed steps exist (failed ${failed.length} · unknown ${unknown.length} · open ${open.length} · planned ${planned.length}) — ledger incomplete`
     } else {
-      for (const [actor, client, key] of [['A', A, 'balanceA'], ['C', C, 'balanceC']]) {
+      for (const actor of ['A', 'B', 'C', 'T']) {
+        const client = ROLE_CLIENTS[actor]
+        const key = ROLE_KEYS[actor]
         const ledger = RUN.journal.flow?.[actor] ?? []
         const sumIn = ledger.reduce((a, e) => a + BigInt(e.in ?? '0'), 0n)
         const sumOut = ledger.reduce((a, e) => a + BigInt(e.out ?? '0'), 0n)
@@ -1253,7 +1224,7 @@ export function createRunner(deps) {
       `- commit: \`${report.commit}\` · chainId ${report.chainId} · paths ${required.join('/') || '—'}`,
       `- instances: main \`${RUN.input.instances.main}\` · test \`${RUN.input.instances.test}\``,
       `- spend: gas ${ai3(spend.gas)} · fees ${ai3(spend.fees)} · consensus ≈${ai3(spend.consensus)}${report.finishReserveUsed ? ' · ⚠ the safe-finish reserve was used' : ''}`,
-      `- funds: A ${funds.A?.diff ?? '—'} · C ${funds.C?.diff ?? '—'} (0 = reconciled)`,
+      `- funds: A ${funds.A?.diff ?? '—'} · B ${funds.B?.diff ?? '—'} · C ${funds.C?.diff ?? '—'} · T ${funds.T?.diff ?? '—'} (0 = reconciled)`,
       `- orders: ${report.ordersCreated.map((o) => `${o.step}→#${o.orderId}`).join(' · ') || '(none)'}`, '',
       '| gate | result | detail |', '|---|---|---|',
       ...gates.map((g) => `| ${g.name} | ${g.pass ? '✓' : '✗'} | ${g.detail} |`),
@@ -1436,24 +1407,32 @@ export function createRunner(deps) {
         }
         gate(`salesCode_${key}`, codeMatch, codeMatch ? 'on-chain code matches byte for byte' : 'on-chain code differs from the build artifact')
         gate(`salesParams_${key}`, paramsMatch, paramsMatch ? 'readback matches the deployment record' : 'readback differs from the deployment record')
+        // the on-chain treasury must equal the input T (where the platform fee
+        // goes — verified directly, not via the deployment record)
+        const treasuryIsT = T && String(treasury).toLowerCase() === T.address.toLowerCase()
+        gate(`salesTreasuryIsT_${key}`, treasuryIsT, treasuryIsT ? `treasury = T ${T.address}` : `treasury ${String(treasury)} ≠ T ${T?.address ?? '(not injected)'}`)
       }
 
-      // 3. role balances & gas estimate
-      const [balA, balC, gasPrice] = await Promise.all([bal(A), bal(C), withRetry(() => A.publicClient.getGasPrice())])
+      // 3. role balances & gas estimate (T receives only; a zero balance is fine)
+      const [balA, balB, balC, balT, gasPrice] = await Promise.all([bal(A), bal(B), bal(C), bal(T), withRetry(() => A.publicClient.getGasPrice())])
       report.roles = {
         A: { address: A.address, balance: String(balA) },
+        B: { address: B.address, balance: String(balB) },
         C: { address: C.address, balance: String(balC) },
+        T: { address: T.address, balance: String(balT), note: 'receives only; zero is fine' },
         gasPrice: String(gasPrice),
         perTxEstimate: `${ai3(150_000n * gasPrice)}/tx (150k gas upper bound)`,
       }
       gate('balanceA', balA > 0n, ai3(balA))
+      gate('balanceB', balB > 0n, ai3(balB))
       gate('balanceC', balC > 0n, ai3(balC))
+      gate('treasuryTProvided', Boolean(T), T ? T.address : 'runner has no T — role separation incomplete')
 
-      // 4. Mailbox key announcement state (A/C — informational, no gate)
+      // 4. Mailbox key announcement state (A/B/C — informational, no gate)
       const mailbox = deployments['auto-evm-mainnet-mailbox']
       report.mailbox = { address: mailbox?.address, deployBlock: mailbox?.blockNumber }
       if (mailbox) {
-        for (const [n, c] of [['A', A], ['C', C]]) {
+        for (const [n, c] of [['A', A], ['B', B], ['C', C]]) {
           const k = await withRetry(() => c.publicClient.readContract({ address: mailbox.address, abi: mailboxAbis, functionName: 'keys', args: [c.address] }))
           report.mailbox[`${n}Announced`] = k !== ''
         }
@@ -1562,8 +1541,8 @@ export function createRunner(deps) {
         throw new Exit(2, `budget legality: cap ${ai3(capWei)} < ${nPurchases} purchases ${ai3(toWei(priceStr) * BigInt(nPurchases))} + safe-finish reserve ${ai3(FINISH_RESERVE)} — raise --cap`)
       }
 
-      const [balA, balC, contractMain, contractTest] = await Promise.all([
-        bal(A), bal(C),
+      const [balA, balB, balC, balT, contractMain, contractTest] = await Promise.all([
+        bal(A), bal(B), bal(C), bal(T),
         A.publicClient.getBalance({ address: mainD.address }), A.publicClient.getBalance({ address: testD.address }),
       ])
       RUN.input = {
@@ -1572,17 +1551,17 @@ export function createRunner(deps) {
         registry: deployments['auto-evm-mainnet-v2'].address,
         mailbox: deployments['auto-evm-mainnet-mailbox'].address,
         mailboxDeployBlock: Number(deployments['auto-evm-mainnet-mailbox'].blockNumber),
-        roles: { A: A.address, C: C.address },
+        roles: { A: A.address, B: B.address, C: C.address, T: T.address },
         price: priceStr,
         cap: capStr, capWei: String(capWei),
         paths, // frozen full plan (resume restores from here, never re-derived from steps)
         baseline: {
-          balanceA: String(balA), balanceC: String(balC),
+          balanceA: String(balA), balanceB: String(balB), balanceC: String(balC), balanceT: String(balT),
           contractMain: String(contractMain), contractTest: String(contractTest),
         },
       }
       jwrite('input.json', RUN.input) // fix 2: atomic persist of the frozen inputs before any broadcast
-      console.log(`run ${runId} initialized: price=${RUN.input.price} AI3 · cap=${RUN.input.cap} AI3 · paths=${RUN.input.paths.join(',')} · A=${A.address} · C=${C.address}`)
+      console.log(`run ${runId} initialized: price=${RUN.input.price} AI3 · cap=${RUN.input.cap} AI3 · paths=${RUN.input.paths.join(',')} · A=${A.address} · B=${B.address} · C=${C.address} · T=${T.address}`)
     } else {
       // resume (or accidental re-run): verify the frozen inputs against the current environment
       if (!resumeMode) throw new Exit(2, `runId ${runId} already has input.json — use a new runId or resume (old records are never overwritten)`)
@@ -1594,7 +1573,7 @@ export function createRunner(deps) {
         'instances.main': mainD.address, 'instances.test': testD.address,
         registry: deployments['auto-evm-mainnet-v2'].address,
         mailbox: deployments['auto-evm-mainnet-mailbox'].address,
-        'roles.A': A.address, 'roles.C': C.address,
+        'roles.A': A.address, 'roles.B': B.address, 'roles.C': C.address, 'roles.T': T.address,
       }
       const drift = []
       if (f.suite !== SUITE) drift.push(`suite: current ${SUITE} ≠ frozen ${f.suite ?? '(missing)'}`)
@@ -1624,23 +1603,28 @@ export function createRunner(deps) {
       if (String(tr).toLowerCase() !== String(inst.treasury).toLowerCase() || Number(pbps) !== Number(inst.platformBps ?? 1000)) {
         throw new Exit(2, `${key} instance parameters differ from the deployment record (treasury/platformBps) — stopping`)
       }
+      if (String(tr).toLowerCase() !== T.address.toLowerCase()) {
+        throw new Exit(2, `${key} instance treasury ${String(tr)} ≠ input T ${T.address} — the fee destination contradicts the role model, stopping`)
+      }
     }
 
-    // buyer gas guard: the runner never auto-funds (read-only checks only);
-    // insufficient C balance blocks with the exact funding requirement
-    // (each frozen path pays exactly one purchase + a gas buffer)
-    const balC = await bal(C)
-    const nPurchase = RUN.input.paths.filter((p) => PURCHASE_STEP[p.toUpperCase()]).length
-    const minC = price * BigInt(nPurchase) + 10n ** 16n
-    if (balC < minC) {
-      throw new Exit(2, `buyer C balance ${ai3(balC)} < minimum ${ai3(minC)} (${ai3(price)} × ${nPurchase} purchases + gas buffer) — transfer from A first, e.g. A.walletClient.sendTransaction({ to: '${C.address}', value: 10n ** 17n })`)
+    // buyer gas guards (B and C hold funds independently; the runner never
+    // auto-funds): B pays for d1, C pays for a — each needs one purchase + a gas buffer
+    const GAS_MARGIN = 10n ** 16n
+    const roleNeeds = (pathKey) => (RUN.input.paths.includes(pathKey) ? price + GAS_MARGIN : 0n)
+    for (const [role, client, pathKey, funder] of [
+      ['B', B, 'd1', 'A'],
+      ['C', C, 'a', 'A'],
+    ]) {
+      const min = roleNeeds(pathKey)
+      const have = await bal(client)
+      if (have < min) {
+        throw new Exit(2, `buyer ${role} balance ${ai3(have)} < minimum ${ai3(min)} (path ${pathKey}: ${ai3(price)} purchase + gas buffer) — transfer from ${funder} first, e.g. ${funder}.walletClient.sendTransaction({ to: '${client.address}', value: 10n ** 17n })`)
+      }
     }
 
     const queue = RUN.input.paths // frozen plan: includes not-yet-started paths
     const results = []
-
-    RUN.journal.balances.A = RUN.journal.balances.A ?? {}
-    RUN.journal.balances.C = RUN.journal.balances.C ?? {}
 
     try {
       for (const p of queue) {
