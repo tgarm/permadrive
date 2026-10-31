@@ -118,6 +118,52 @@ export const CHAIN_ID_EXPECTED = 870
 // records; input.json freezes the suite and resume rejects a mismatch outright
 export const SUITE = 'direct-sales-v1'
 
+// Required-assertion coverage sets — an assertion id is the stable identifier
+// of a path assertion, defaulting to the label literal (labels with
+// interpolation pass an explicit id at their call sites). finish() judges the
+// gate by full coverage of this set (every entry present and passing) instead
+// of "one trivial assertion passing is enough"; recovery logic that skips a
+// key check (especially fresh-guarded assertions that a resume never re-runs)
+// now makes the report non-passed. Update this table before changing any
+// assertion label — report comparability and resume evidence matching both
+// depend on stable ids.
+export const ASSERTION_PLAN_VERSION = 1
+export const REQUIRED_ASSERTIONS = {
+  D1: [
+    'D1 listing readback (currentRevision=1, seller namespace)',
+    'D1 revision snapshot: price/platformBps=1000/deliveryMode=0 (Seller)',
+    'D1-order-snapshot',
+    'D1-split',
+    'D1 contract balance 0 after purchase (pay-and-split, no escrow)',
+    'D1 markKeySent: KeySent (optional state registration)',
+    'D1 positive rating: up=1/down=0/distinct buyers=1',
+    'D1 switch to negative: old vote subtracted before the new one added (up=0/down=1, no stacking)',
+    'D1 service dimension (provider=0) migrated in sync',
+    'D1 non-buyer rating rejected (NotBuyer, zero-tx simulate)',
+    'D1 delist complete (currentRevision=0)',
+    'D1 purchase after delist rejected (NotListed, zero-tx simulate)',
+  ],
+  D2: [
+    'D2 stale-revision purchase rejected (NotCurrentRevision, zero-tx simulate)',
+    'D2 purchase after delist rejected (NotListed, zero-tx simulate)',
+    'D2 atomic rollback: orderCount unchanged (no partial deals)',
+    'D2 atomic rollback: contract balance stays 0 (no retained funds)',
+  ],
+  A: [
+    'A4 FeePaid = quote (max(minFee, size×feePerByte))',
+    'A5 production listing readback (currentRevision=1)',
+    'A7-order-snapshot',
+    'A7 price/platform-fee snapshot correct (Seller mode)',
+    'A7-split',
+    'A7 contract balance 0 after purchase (pay-and-split: fee → T + net → A immediately)',
+    'A9 markKeySent: KeySent',
+    'A12 ciphertext integrity gate (cipherSha256/cipherSize)',
+    'A13 plaintext sha256 matches (decryption + integrity)',
+    'A14 rating on-chain: up=1/down=0/distinct buyers=1',
+    'A15 delist complete',
+  ],
+}
+
 // Separate safe-finish reserve: 3 writes (worst case) × 150k gas × 30 gwei upper
 // bound. Regular writes must not eat into it; only "essential" steps may use it to
 // close out funds/state.
@@ -213,6 +259,16 @@ export function createRunner(deps) {
       : null
     journal ??= { runId: id, steps: [], spend: { gas: '0', fees: '0', consensus: '0', escrow: '0' } }
     journal.assertions ??= {}
+    // The assertion plan is persisted with the run (finish judges by its
+    // terms). A run with existing evidence but no plan predates this change —
+    // keep the legacy terms (required=null); never retroactively invalidate
+    // previously passing records.
+    if (!journal.assertionPlan) {
+      const hasLegacyEvidence = Object.values(journal.assertions).some((l) => Array.isArray(l) && l.length > 0)
+      journal.assertionPlan = hasLegacyEvidence
+        ? { version: 0, required: null }
+        : { version: ASSERTION_PLAN_VERSION, required: REQUIRED_ASSERTIONS }
+    }
     journal.pathResults ??= {}
     journal.balances ??= {}
     journal.flow ??= {}
@@ -232,6 +288,12 @@ export function createRunner(deps) {
   }
 
   const isFresh = (id) => step(id).state !== 'checked'
+  // Whether the assertion evidence is already in the journal (the
+  // "execute once and persist the evidence" guard idiom, same family as B3).
+  // Never guard with isFresh(the step itself): after txStep the step is
+  // checked, isFresh is false forever, and the assertions would never run
+  // (the D1 delist assertions suffered exactly that).
+  const hasAssertion = (pathKey, id) => (RUN.journal.assertions[pathKey] ?? []).some((a) => (a.id ?? a.label) === id)
 
   function syncSpend() {
     RUN.journal.spend = {
@@ -536,9 +598,12 @@ export function createRunner(deps) {
   // ---------- path assertions (persisted evidence; consumed by finish's gates) ----------
 
   function mkCheck(pathKey, res) {
-    return (pass, label, detail = '') => {
+    return (pass, label, detail = '', id) => {
+      // id defaults to the label (a stable literal); labels with interpolation
+      // pass an explicit id at their call site
+      const rec = { pass, label, detail, id: id ?? label, at: new Date(now()).toISOString() }
       res.checks.push({ pass, label, detail })
-      ;(RUN.journal.assertions[pathKey] ??= []).push({ pass, label, detail, at: new Date(now()).toISOString() })
+      ;(RUN.journal.assertions[pathKey] ??= []).push(rec)
       jwrite('journal.json', RUN.journal)
       console.log(`    ${pass ? '✓' : '✗'} ${label}${detail ? ` · ${detail}` : ''}`)
       if (!pass) throw new Exit(1, `path ${pathKey} assertion failed: ${label}`)
@@ -646,11 +711,11 @@ export function createRunner(deps) {
     const o = await orderOf(A, testAddr, orderId)
     if (d1fresh) {
       check(o.state === 0 && o.price === price && o.seller === A.address && o.buyer === B.address && o.platformBps === 1000 && o.provider === '0x0000000000000000000000000000000000000000',
-        `D1 order(${orderId}) snapshot complete (Paid, Seller mode)`)
+        `D1 order(${orderId}) snapshot complete (Paid, Seller mode)`, '', 'D1-order-snapshot')
       // per-purchase split assertion: fee/net with Σ = price; the ledger's
       // extraCredits share the same numbers and finish reconciles real balances
       check(feeD1 + (price - feeD1) === price && o.platformBps === pbpsD1,
-        `D1 split accounting (fee ${ai3(feeD1)} → T · net ${ai3(price - feeD1)} → A, Σ=price)`)
+        `D1 split accounting (fee ${ai3(feeD1)} → T · net ${ai3(price - feeD1)} → A, Σ=price)`, '', 'D1-split')
       check((await withRetry(() => A.publicClient.getBalance({ address: testAddr }))) === 0n, 'D1 contract balance 0 after purchase (pay-and-split, no escrow)')
     }
 
@@ -748,7 +813,11 @@ export function createRunner(deps) {
     check(true, 'D1 non-buyer rating rejected (NotBuyer, zero-tx simulate)')
 
     await txStep(step('D1-delist'), A, { to: testAddr, abi: abis, fn: 'delist', args: [fileKey] }, { actor: 'A', essential: true })
-    if (isFresh('D1-delist')) {
+    // The guard must look at existing assertion evidence, not
+    // isFresh('D1-delist'): txStep has already checked the step, so isFresh
+    // is false forever — under the old guard these assertions never ran
+    // (caught by the C02 coverage gate)
+    if (!hasAssertion('D1', 'D1 delist complete (currentRevision=0)')) {
       check((await v2read(A, testAddr, 'currentRevision', [lid])) === 0n, 'D1 delist complete (currentRevision=0)')
       await expectRevert('D1-delist-purchase', C, { to: testAddr, abi: abis, fn: 'purchase', args: [lid, 1n, price, 2000, 5000], value: price }, 'NotListed')
       check(true, 'D1 purchase after delist rejected (NotListed, zero-tx simulate)')
@@ -947,12 +1016,12 @@ export function createRunner(deps) {
     const orderIdA = BigInt(s7.result.orderId)
     const oA = await orderOf(A, mainAddr, orderIdA)
     if (a7fresh) {
-      check(oA.state === 0 && oA.seller === A.address && oA.buyer === C.address, `A7 order(${orderIdA}) Paid, cross-address snapshot correct`)
+      check(oA.state === 0 && oA.seller === A.address && oA.buyer === C.address, `A7 order(${orderIdA}) Paid, cross-address snapshot correct`, '', 'A7-order-snapshot')
       check(oA.price === price && oA.platformBps === 1000 && oA.provider === '0x0000000000000000000000000000000000000000', 'A7 price/platform-fee snapshot correct (Seller mode)')
-      // per-purchase split assertion (fee → T, net → A); the ledger's extraCredits
-      // share the same numbers and finish reconciles all four role balances
+      // per-purchase split assertion: fee/net with Σ = price; the ledger's
+      // extraCredits share the same numbers and finish reconciles real balances
       check(feeA + (price - feeA) === price && oA.platformBps === pbpsA,
-        `A7 split accounting (fee ${ai3(feeA)} → T · net ${ai3(price - feeA)} → A, Σ=price)`)
+        `A7 split accounting (fee ${ai3(feeA)} → T · net ${ai3(price - feeA)} → A, Σ=price)`, '', 'A7-split')
       check((await withRetry(() => A.publicClient.getBalance({ address: mainAddr }))) === 0n, 'A7 contract balance 0 after purchase (pay-and-split: fee → T + net → A immediately)')
     }
 
@@ -1140,6 +1209,15 @@ export function createRunner(deps) {
       list.filter((a) => !a.pass).map((a) => `${p}:${a.label}`),
     )
     const noEvidence = required.filter((p) => (RUN.journal.assertions?.[p] ?? []).length === 0)
+    // Coverage by required set (id level) — any missing required assertion
+    // fails the gate, preventing a lone trivial assertion from slipping
+    // through and resume logic from silently skipping key checks
+    const missingRequired = RUN.journal.assertionPlan?.required
+      ? required.flatMap((p) => {
+          const have = new Set((RUN.journal.assertions?.[p] ?? []).map((a) => a.id ?? a.label))
+          return (RUN.journal.assertionPlan.required[p] ?? []).filter((id) => !have.has(id)).map((id) => `${p}:${id}`)
+        })
+      : []
     const ordersMissing = required
       .filter((p) => pathResults[p] && PURCHASE_STEP[p]) // d2 = the rollback path has no deal order, no orderId check
       .filter((p) => {
@@ -1179,7 +1257,7 @@ export function createRunner(deps) {
 
     const gates = [
       { name: 'requiredPathsComplete', pass: required.length > 0 && missingPaths.length === 0, detail: missingPaths.length ? `incomplete: ${missingPaths.join(',')}` : 'all mandatory paths have a terminal state' },
-      { name: 'pathAssertionsAllPass', pass: required.length > 0 && badAssertions.length === 0 && noEvidence.length === 0, detail: [badAssertions.length ? `failed assertions: ${badAssertions.join('; ')}` : '', noEvidence.length ? `no assertion evidence: ${noEvidence.join(',')}` : ''].filter(Boolean).join(' · ') || 'evidence complete and all passing' },
+      { name: 'pathAssertionsAllPass', pass: required.length > 0 && badAssertions.length === 0 && noEvidence.length === 0 && missingRequired.length === 0, detail: [badAssertions.length ? `failed assertions: ${badAssertions.join('; ')}` : '', noEvidence.length ? `no assertion evidence: ${noEvidence.join(',')}` : '', missingRequired.length ? `missing required assertions: ${missingRequired.join(', ')}` : ''].filter(Boolean).join(' · ') || 'evidence complete and all passing (required set covered)' },
       { name: 'noFailedSteps', pass: failed.length === 0, detail: failed.map((s) => s.id).join(',') || 'none' },
       { name: 'noOpenOrUnknownSteps', pass: unknown.length === 0 && open.length === 0 && planned.length === 0, detail: [...unknown, ...open, ...planned].map((s) => `${s.id}(${s.state})`).join(',') || 'none' },
       { name: 'salesContractBalanceZero', pass: salesBalMain === 0n && salesBalTest === 0n, detail: `main ${ai3(salesBalMain)} · test ${ai3(salesBalTest)} (0 = no retained funds)` },
@@ -1205,6 +1283,7 @@ export function createRunner(deps) {
         consensusApprox: String(spend.consensus), escrowOutstanding: String(spend.escrow),
       },
       finishReserveUsed: Boolean(RUN.journal.finishReserveUsed),
+      assertionPlan: { version: RUN.journal.assertionPlan?.version ?? null }, // which required-set version judged this report
       balancesAtFinish: {
         A: String(await bal(A)), C: String(await bal(C)),
         salesMainBalance: String(salesBalMain),

@@ -3,14 +3,16 @@
 // src/lib/wallet/types.ts — Substrate (publishing remarks) and EVM
 // FileRegistry registration) activate independently of each other.
 
-import { createContext, useContext, useState, type ReactNode } from 'react'
+import { createContext, useContext, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import type { EvmSigner, SubstrateSigner } from './lib/wallet/types'
 
 interface SignerState {
   active: SubstrateSigner | null
-  setActive: (signer: SubstrateSigner | null) => void
+  // Dispatch shape: allows functional updates (wallet event listeners rely on
+  // prev state, not closure snapshots)
+  setActive: Dispatch<SetStateAction<SubstrateSigner | null>>
   evm: EvmSigner | null
-  setEvm: (signer: EvmSigner | null) => void
+  setEvm: Dispatch<SetStateAction<EvmSigner | null>>
 }
 
 const SignerContext = createContext<SignerState | null>(null)

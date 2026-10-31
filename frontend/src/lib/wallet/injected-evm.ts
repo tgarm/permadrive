@@ -8,9 +8,9 @@
 // which case fall back to wallet_addEthereumChain.
 
 import type { EIP1193Provider } from 'viem'
-import { AUTO_EVM_CHAIN_ID, walletAddChainParams } from '../evm'
-import type { EvmSigner } from './types'
-import { t } from '../../i18n'
+import { AUTO_EVM_CHAIN_ID, walletAddChainParams } from '../evm.ts'
+import type { EvmSigner } from './types.ts'
+import { t } from '../../i18n/core.ts'
 
 // wallet metadata announced via EIP-6963 (info.icon is a dataURI; this app
 // uses text-only buttons and ignores it)
@@ -103,9 +103,39 @@ export async function connectEvmWallet(wallet: DiscoveredEvmWallet): Promise<Evm
     } else throw e
   }
   const chainIdHex = (await eth.request({ method: 'eth_chainId' })) as string
-  if (Number.parseInt(chainIdHex, 16) !== AUTO_EVM_CHAIN_ID) {
+  const chainId = Number.parseInt(chainIdHex, 16)
+  if (chainId !== AUTO_EVM_CHAIN_ID) {
     throw new Error(t('errors.evmWrongChain', [chainIdHex]))
   }
   // the label is a stable identifier (not copy); WalletBar maps it to a display name in the active locale
-  return { kind: 'injected', address: accounts[0], provider: eth, label: wallet.label }
+  return { kind: 'injected', address: accounts[0], provider: eth, chainId, label: wallet.label }
+}
+
+// Injected wallets are live — accounts and networks can change inside the
+// wallet at any time, and an app-side signer that does not follow along would
+// keep signing with a stale address or writing to the wrong chain. Wrapping
+// the current provider's accountsChanged/chainChanged binding into a testable
+// function (WalletBar calls it in an effect); returns a detach function that
+// MUST be called when the signer is switched or disconnected. Listens only —
+// never issues requests, never switches chains on the user's behalf.
+export function attachEvmWalletEvents(
+  provider: EIP1193Provider,
+  handlers: {
+    /** account change: empty array = disconnected/locked inside the wallet; non-empty = current account (possibly a different one) */
+    onAccountsChanged: (accounts: string[]) => void
+    /** network change: hex chainId (e.g. '0x366'). Only refreshes signer.chainId; the write guard lives in registry.walletClientFor */
+    onChainChanged: (chainIdHex: string) => void
+  },
+): () => void {
+  // Defensive optional access: viem types mark on/removeListener as required,
+  // but legacy/low-quality providers may not implement them — degrade silently
+  // to "no events" (same as the old behavior) when missing.
+  const onAccounts = (accounts: unknown) => handlers.onAccountsChanged((accounts as string[]) ?? [])
+  const onChain = (chainIdHex: unknown) => handlers.onChainChanged(String(chainIdHex))
+  provider.on?.('accountsChanged', onAccounts)
+  provider.on?.('chainChanged', onChain)
+  return () => {
+    provider.removeListener?.('accountsChanged', onAccounts)
+    provider.removeListener?.('chainChanged', onChain)
+  }
 }

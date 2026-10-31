@@ -18,6 +18,11 @@
 //   S9  partially executed paths — report says incomplete, never passed; resume completes
 //       after the fault clears
 //   S10 preflight gate: codeMatch=false must fail (a hard gate, not an info item)
+//   S11 deleting one required assertion from the journal (a fresh-guarded one,
+//       which a resume cannot re-run) must make the report non-passed and name
+//       the missing id; restoring the evidence recovers (coverage gate)
+//   S12 a legacy run without an assertion plan — loads as the legacy terms
+//       (version 0 / required null), previously passing records stay valid
 //
 // The mocks implement the minimal client surface the core touches
 // (prepareTransactionRequest/signTransaction/sendRawTransaction/waitForTransactionReceipt/
@@ -681,6 +686,52 @@ test('S10 preflight gate: codeMatch=false must fail', async () => {
   assert(exitCode === 1, `exitCode ${exitCode} ≠ 1`)
   const g = report.gates.find((x) => x.name === 'salesCode_auto-evm-mainnet-direct-sales')
   assert(g && g.pass === false, 'the salesCode gate should fail')
+})
+
+test('S11 deleting a required assertion must fail the report (coverage gate)', async () => {
+  const { runner, dir } = await setup({})
+  const { report: r1, exitCode: e1 } = await runner.runOrResume(false, { runId: 's11', cap: '0.2', price: '0.01', paths: 'd1,d2,a' })
+  assert(e1 === 0 && r1.status === 'passed', `baseline run did not pass: ${r1.status}`)
+  assert(r1.assertionPlan?.version === 1, `assertion plan version ${r1.assertionPlan?.version} ≠ 1 (new runs must be judged by the current plan)`)
+  const jp = path.join(dir, 's11', 'journal.json')
+  const journal = JSON.parse(readFileSync(jp, 'utf8'))
+  // victim is a fresh-guarded assertion (a resume skips it because
+  // isFresh=false) — deleting it cannot self-heal by re-running, which is the
+  // minimal injection model of "recovery logic silently skipping a key check"
+  const victim = 'D1 positive rating: up=1/down=0/distinct buyers=1'
+  const list = journal.assertions.D1
+  const idx = list.findIndex((a) => (a.id ?? a.label) === victim)
+  assert(idx >= 0, 'the baseline journal lacks the expected assertion — the required set drifted from the implementation, align first')
+  const saved = list[idx]
+  list.splice(idx, 1)
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(jp, JSON.stringify(journal))
+  // resume: the fresh guard skips the check → evidence cannot regenerate →
+  // the gate must catch it (no silent skipping)
+  const { report: r2, exitCode: e2 } = await runner.runOrResume(true, { runId: 's11' })
+  assert(e2 !== 0 && r2.status !== 'passed', `resume after deleting evidence passed (${r2.status}) — the coverage gate failed`)
+  const gate = r2.gates.find((g) => g.name === 'pathAssertionsAllPass')
+  assert(gate?.pass === false, 'pathAssertionsAllPass should fail')
+  assert(/missing required assertions/.test(gate.detail) && gate.detail.includes(`D1:${victim}`), `gate detail does not name the missing id: ${gate?.detail}`)
+  // restore the evidence → recompute via reportOnly → passes again
+  list.push(saved)
+  writeFileSync(jp, JSON.stringify(journal))
+  const { report: r3, exitCode: e3 } = await runner.reportOnly({ runId: 's11' })
+  assert(e3 === 0 && r3.status === 'passed', `did not pass after restore: ${r3.status}`)
+})
+
+test('S12 a legacy run without an assertion plan stays valid (no retroactive invalidation)', async () => {
+  const { runner, dir } = await setup({})
+  const { report: r1, exitCode: e1 } = await runner.runOrResume(false, { runId: 's12', cap: '0.2', price: '0.01', paths: 'd1,d2,a' })
+  assert(e1 === 0 && r1.status === 'passed', `baseline run did not pass: ${r1.status}`)
+  const jp = path.join(dir, 's12', 'journal.json')
+  const journal = JSON.parse(readFileSync(jp, 'utf8'))
+  delete journal.assertionPlan // simulate a pre-coverage-gate run (evidence present, no plan)
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(jp, JSON.stringify(journal))
+  const { report: r2, exitCode: e2 } = await runner.reportOnly({ runId: 's12' })
+  assert(e2 === 0 && r2.status === 'passed', `legacy terms misjudged: ${r2.status} — a previously passing record must not be invalidated retroactively`)
+  assert(r2.assertionPlan?.version === 0, `legacy plan version should be 0, got ${r2.assertionPlan?.version}`)
 })
 
 // ---------- runner ----------

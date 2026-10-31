@@ -40,6 +40,11 @@ export interface EvmSigner {
   provider?: EIP1193Provider
   /** local path: viem HD account (local signing, sent straight to the RPC) */
   account?: HDAccount
+  /** injected path: chainId verified at connect time, kept fresh by the
+   *  wallet's chainChanged event (doc: after an in-wallet network switch,
+   *  writes are rejected by the registry.walletClientFor guard); the local
+   *  path talks to our own RPC (always 870) and has no such notion */
+  chainId?: number
   label: string
 }
 

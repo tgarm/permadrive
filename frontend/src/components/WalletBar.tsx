@@ -15,7 +15,8 @@ import { useSigner } from '../signer-context'
 import { ChainTag } from './ChainTag'
 import { createLocalSigner } from '../lib/wallet/local-keyring'
 import { createLocalEvmSigner } from '../lib/wallet/local-evm'
-import { connectEvmWallet, discoverEvmWallets, type DiscoveredEvmWallet } from '../lib/wallet/injected-evm'
+import { attachEvmWalletEvents, connectEvmWallet, discoverEvmWallets, type DiscoveredEvmWallet } from '../lib/wallet/injected-evm'
+import { AUTO_EVM_CHAIN_ID } from '../lib/evm'
 import { t } from '../i18n'
 
 // Signer labels are stable identifiers written by the lib layer; they map to
@@ -110,6 +111,40 @@ export function WalletBar() {
     }
   }
 
+  // Follow the injected wallet's account/network changes — an in-wallet
+  // account switch updates the signer address in place (provider/label stay,
+  // every feature re-reads by address); a wallet-side disconnect (empty
+  // array) disconnects the signer; a network switch only refreshes chainId,
+  // writes are rejected by the registry.walletClientFor guard (the UI notice
+  // below explains), switching back to 870 re-enables automatically.
+  // Functional updates keep the handlers free of stale signer snapshots;
+  // cleanup detaches on switch/disconnect.
+  const evmProvider = evm?.kind === 'injected' ? evm.provider : undefined
+  useEffect(() => {
+    if (!evmProvider) return
+    return attachEvmWalletEvents(evmProvider, {
+      onAccountsChanged: (accounts) => {
+        if (accounts.length === 0) {
+          setEvm((prev) => (prev?.kind === 'injected' ? null : prev))
+          setDevEvm((d) => (d === 'injected' ? 'none' : d))
+        } else {
+          setEvm((prev) =>
+            prev?.kind === 'injected' && prev.address !== accounts[0] ? { ...prev, address: accounts[0] } : prev,
+          )
+        }
+      },
+      onChainChanged: (chainIdHex) => {
+        const chainId = Number.parseInt(chainIdHex, 16)
+        if (Number.isNaN(chainId)) return
+        setEvm((prev) => (prev?.kind === 'injected' && prev.chainId !== chainId ? { ...prev, chainId } : prev))
+      },
+    })
+  }, [evmProvider, setEvm])
+
+  // Chain-mismatch notice (same source of truth as the write guard): when the
+  // wallet is on a different network, say plainly that EVM actions are paused
+  const evmChainMismatch = evm?.kind === 'injected' && evm.chainId !== undefined && evm.chainId !== AUTO_EVM_CHAIN_ID
+
   return (
     <div className="wallet-bar">
       <div className="wallet-section">
@@ -185,6 +220,7 @@ export function WalletBar() {
           </div>
         )}
         {evmError && <div className="error-text">{evmError}</div>}
+        {evmChainMismatch && <div className="error-text">{t('errors.evmChainMismatch', [String(evm?.chainId ?? '')])}</div>}
       </div>
 
       <button className="btn link small" onClick={() => setShowDev((v) => !v)}>

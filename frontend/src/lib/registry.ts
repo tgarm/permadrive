@@ -8,7 +8,7 @@
 
 import { createPublicClient, createWalletClient, custom, http, type PublicClient, type WalletClient } from 'viem'
 import { loadConfig } from './config.ts'
-import { autoEvmChain } from './evm.ts'
+import { AUTO_EVM_CHAIN_ID, autoEvmChain } from './evm.ts'
 import { REGISTRY_ABI } from './registry-abi.ts'
 import type { EvmSigner } from './wallet/types.ts'
 import { t } from '../i18n/core.ts'
@@ -41,6 +41,14 @@ function registryAddress(): `0x${string}` {
 }
 
 export function walletClientFor(signer: EvmSigner): WalletClient {
+  // After an in-wallet network switch, an injected signer must not write to
+  // the wrong chain — every provider-backed write is rejected (reads go
+  // through our own HTTP RPC and are unaffected). chainId is kept fresh by
+  // the WalletBar chainChanged listener; switching back to 870 re-enables
+  // writes automatically. We never switch chains on the user's behalf.
+  if (signer.kind === 'injected' && signer.chainId !== undefined && signer.chainId !== AUTO_EVM_CHAIN_ID) {
+    throw new Error(t('errors.evmChainMismatch', [String(signer.chainId)]))
+  }
   if (signer.kind === 'injected') {
     if (!signer.provider) throw new Error(t('errors.injectedNoProvider'))
     return createWalletClient({ chain: autoEvmChain, transport: custom(signer.provider), account: signer.address as `0x${string}` })

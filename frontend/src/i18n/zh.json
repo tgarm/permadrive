@@ -369,6 +369,7 @@
     "noEvmWalletDetected": "未检测到浏览器钱包（MetaMask 等）",
     "evmNoAccounts": "钱包未返回账户",
     "evmWrongChain": "钱包未切到 Auto EVM（chainId {0} ≠ 870）—— 请在钱包内手动切换后重试",
+    "evmChainMismatch": "钱包已切到其他网络（chainId {0} ≠ 870）—— EVM 操作暂停，切回 Auto EVM 后自动恢复（不会代你切链）",
     "fileEncryptionNoChannel": "没有可用的密钥包裹通道：此钱包签名不可复现。请设置口令后重试。",
     "fileDecryptNoChannel": "签名解包失败，且该 manifest 没有口令通道",
     "fileDecryptCancelled": "已取消解密",

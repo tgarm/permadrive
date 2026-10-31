@@ -369,6 +369,7 @@
     "noEvmWalletDetected": "no browser wallet detected (MetaMask etc.)",
     "evmNoAccounts": "the wallet returned no accounts",
     "evmWrongChain": "wallet is not on Auto EVM (chainId {0} ≠ 870) — switch the network in the wallet and retry",
+    "evmChainMismatch": "wallet switched to another network (chainId {0} ≠ 870) — EVM actions are paused; switch back to Auto EVM to continue (we never switch chains on your behalf)",
     "fileEncryptionNoChannel": "No usable key-wrap channel: this wallet's signatures are not reproducible. Set a passphrase and retry.",
     "fileDecryptNoChannel": "Signature unwrap failed and this manifest has no passphrase channel",
     "fileDecryptCancelled": "Decryption cancelled",
