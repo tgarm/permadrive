@@ -9,19 +9,22 @@
 // refund rules are stated in the UI. Prices show as AI3, travel as wei; state
 // chips are stable identifiers with copy from the dictionary.
 //
-// Dual instances: once paywallV2Address is configured it becomes the active
-// instance — new listings/purchases/deliveries go through v2 (order snapshots:
-// reprice/delist never affect escrowed orders; a seller namespace cannot be
-// overwritten); v1 is frozen read-only and keeps refund/confirm/withdraw for
-// existing orders (while v2 is unconfigured everything uses v1, the current
-// behavior). Orders render from the normalised OrderRow (seller/state
-// included, never derived from the current listing).
+// Dual instances (R01 handling + second review F01): once
+// paywallV2Address is configured it becomes the active instance — new
+// listings/purchases/deliveries go through v2 (order snapshots: reprice/delist
+// never affect escrowed orders; a seller namespace cannot be overwritten); v1
+// is frozen read-only — while v2 is unconfigured the listing form, buy buttons
+// and legacy delivery are hidden entirely (the write layer rejects too), and
+// existing orders keep refund/confirm/withdraw, with legacy confirm verifying
+// the current payee first. Orders render from the normalised OrderRow
+// (seller/state included, never derived from the current listing).
 
 import { useCallback, useEffect, useState } from 'react'
 import { useChain } from '../chain-context'
 import { useSigner } from '../signer-context'
 import { formatAi3, formatBytes } from '../lib/bytes'
 import {
+  assertLegacyPayee,
   confirmReceipt,
   confirmReceiptByKey,
   confirmReceiptV2,
@@ -29,7 +32,6 @@ import {
   deliverKeyV2,
   fetchMyPurchases,
   fetchMyPurchasesV2,
-  fetchPendingGrants,
   fetchPendingGrantsV2,
   getCredits,
   getCreditsV2,
@@ -38,11 +40,9 @@ import {
   isPdGrant,
   paywallV2Active,
   paywallV2Address,
-  purchase,
   purchaseV2,
   refundByKey,
   refundDealV2,
-  setListingPrice,
   setListingPriceV2,
   unwrapDeliveredKey,
   unwrapManifestKey,
@@ -106,7 +106,10 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
     setListings(map)
     // pending authorisations come from the active instance only (v1 is frozen;
     // its legacy Escrowed orders remain deliverable through the merge below)
-    setPending(v2 ? await fetchPendingGrantsV2(evm.address) : await fetchPendingGrants(evm.address))
+    // Pending authorisations come from the active instance only (F01: while v2
+    // is undeployed legacy offers no delivery entry — escrowed legacy orders are
+    // disposed of by the buyer via refund/confirm)
+    setPending(v2 ? await fetchPendingGrantsV2(evm.address) : [])
     // my purchases: while v2 is active, merge both instances (v1 orders keep
     // refund/confirm/download)
     const legacyRows = await fetchMyPurchases(evm.address)
@@ -123,12 +126,12 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
 
   const listNow = async () => {
     if (!evm || !priceEntry || !priceValue) return
+    if (!v2) { say(t('errors.paywallLegacyFrozen')); return } // F01: no listing while v2 is undeployed
     const wei = BigInt(Math.round(Number(priceValue) * 1e18))
     if (wei <= 0n) return
     setBusy(true)
     try {
-      if (v2) await setListingPriceV2(evm, priceEntry, wei)
-      else await setListingPrice(evm, priceEntry, wei)
+      await setListingPriceV2(evm, priceEntry, wei)
       say(t('paywall.listedOk', [priceValue]))
       setPriceEntry('')
       setPriceValue('')
@@ -142,10 +145,10 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
 
   const unlist = async (entry: RegistryEntry) => {
     if (!evm) return
+    if (!v2) { say(t('errors.paywallLegacyFrozen')); return } // F01: legacy setPrice is frozen
     setBusy(true)
     try {
-      if (v2) await setListingPriceV2(evm, entry.manifestCid, 0n)
-      else await setListingPrice(evm, entry.manifestCid, 0n)
+      await setListingPriceV2(evm, entry.manifestCid, 0n)
       say(t('paywall.unlistedOk', [entry.name]))
       await reload()
     } catch (e) {
@@ -222,11 +225,11 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
 
   const buy = async (row: ViewRow) => {
     if (!evm || !row.price || !row.seller) return
+    if (!v2) { say(t('errors.paywallLegacyFrozen')); return } // F01: no purchase while v2 is undeployed
     setBusy(true)
     try {
       const price = formatAi3(row.price)
-      if (v2) await purchaseV2(evm, row.entry.manifestCid, row.seller, row.price)
-      else await purchase(evm, row.entry.manifestCid, row.price)
+      await purchaseV2(evm, row.entry.manifestCid, row.seller, row.price)
       say(t('paywall.purchasedOk', [row.entry.name, price]))
       await reload()
     } catch (e) {
@@ -299,9 +302,14 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
       saveBlob(plain, manifest.file.name, manifest.file.mimeType)
       say(t('paywall.purchasedDecrypted', [manifest.file.name, plainSha.slice(0, 16)]))
       // decrypt success implies receipt confirmation (pays the seller); on
-      // failure refund stays available within the grace period
+      // failure refund stays available within the grace period.
+      // F01: legacy confirmation settles to the CURRENT listing — verify the
+      // payee is still the order's seller before releasing funds
       if (pv.contract === 'v2') await confirmReceiptV2(evm, pv.orderId!)
-      else await confirmReceipt(evm, pv.entry.manifestCid)
+      else {
+        await assertLegacyPayee(pv.entry.manifestCid, pv.seller)
+        await confirmReceipt(evm, pv.entry.manifestCid)
+      }
       await reload()
     } catch (e) {
       say(`✗ ${(e as Error).message}`)
@@ -315,7 +323,13 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
     setBusy(true)
     try {
       if (pv.contract === 'v2') await confirmReceiptV2(evm, pv.orderId!)
-      else await confirmReceiptByKey(evm, pv.key as `0x${string}`) // legacy: only the key is available when entry is missing
+      else {
+        // legacy: only the key is available when entry is missing. F01:
+        // confirmation settles to the current listing — verify the payee first
+        // (skipped for legacy rows with an unknown seller; the UI says so)
+        await assertLegacyPayee(pv.entry?.manifestCid ?? null, pv.seller)
+        await confirmReceiptByKey(evm, pv.key as `0x${string}`)
+      }
       say(t('paywall.confirmedOk'))
       await reload()
     } catch (e) {
@@ -358,6 +372,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
         )}
       </div>
       <p className="privacy-note">{t('paywall.notice')}</p>
+      {!v2 && <p className="privacy-note">{t('paywall.legacyFrozenNotice')}</p>}
       {notice && <div className="notice">{notice}</div>}
       {!evm && <div className="notice">{t('paywall.connectFirst')}</div>}
 
@@ -366,29 +381,33 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
           {/* seller */}
           <div className="pw-col">
             <h3>{t('paywall.myListings')}</h3>
-            <div className="msg-compose">
-              <div className="kv">
-                <span>{t('paywall.selectEntry')}</span>
-                <select value={priceEntry} onChange={(e) => setPriceEntry(e.target.value)}>
-                  <option value="">—</option>
-                  {entries.map((e) => (
-                    <option key={e.manifestCid} value={e.manifestCid}>
-                      {e.name}
-                    </option>
-                  ))}
-                </select>
+            {v2 ? (
+              <div className="msg-compose">
+                <div className="kv">
+                  <span>{t('paywall.selectEntry')}</span>
+                  <select value={priceEntry} onChange={(e) => setPriceEntry(e.target.value)}>
+                    <option value="">—</option>
+                    {entries.map((e) => (
+                      <option key={e.manifestCid} value={e.manifestCid}>
+                        {e.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="kv">
+                  <span>{t('paywall.priceLabel')}</span>
+                  <input type="number" min="0" step="0.001" placeholder="0.05" value={priceValue} onChange={(e) => setPriceValue(e.target.value)} />
+                </div>
+                <div className="row">
+                  <button className="btn small primary" disabled={busy || !priceEntry || !priceValue} onClick={() => void listNow()}>
+                    {t('paywall.listBtn')}
+                  </button>
+                </div>
+                <p className="muted small-text">{t('paywall.selectHint')}</p>
               </div>
-              <div className="kv">
-                <span>{t('paywall.priceLabel')}</span>
-                <input type="number" min="0" step="0.001" placeholder="0.05" value={priceValue} onChange={(e) => setPriceValue(e.target.value)} />
-              </div>
-              <div className="row">
-                <button className="btn small primary" disabled={busy || !priceEntry || !priceValue} onClick={() => void listNow()}>
-                  {t('paywall.listBtn')}
-                </button>
-              </div>
-              <p className="muted small-text">{t('paywall.selectHint')}</p>
-            </div>
+            ) : (
+              <p className="muted small-text">{t('paywall.legacyListFrozen')}</p>
+            )}
             {myActiveListings.length > 0 && (
               <table className="files-table">
                 <tbody>
@@ -397,9 +416,11 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
                       <td>{e.name}</td>
                       <td>{formatAi3(listings.get(e.manifestCid)!.price)} AI3</td>
                       <td>
-                        <button className="btn ghost small" disabled={busy} onClick={() => void unlist(e)}>
-                          {t('paywall.unlistBtn')}
-                        </button>
+                        {v2 && (
+                          <button className="btn ghost small" disabled={busy} onClick={() => void unlist(e)}>
+                            {t('paywall.unlistBtn')}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -458,9 +479,13 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
                         </td>
                         <td>
                           {row.price ? (
-                            <button className="btn small primary" disabled={busy} onClick={() => void buy(row)}>
-                              {t('paywall.buy')} · {formatAi3(row.price)} AI3
-                            </button>
+                            v2 ? (
+                              <button className="btn small primary" disabled={busy} onClick={() => void buy(row)}>
+                                {t('paywall.buy')} · {formatAi3(row.price)} AI3
+                              </button>
+                            ) : (
+                              <span className="muted small-text">{t('paywall.legacyFrozenShort')}</span>
+                            )
                           ) : (
                             <span className="muted small-text">{t('paywall.notListed')}</span>
                           )}

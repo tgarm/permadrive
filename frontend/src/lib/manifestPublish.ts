@@ -33,6 +33,10 @@ export async function publishManifestToChain(
   // progress text in the active locale
   onStage?.('packing-manifest')
   const prepared = await prepareUpload(file)
-  const outer = await publishPrepared(api, prepared, signer, (stage, detail) => onStage?.(stage, detail))
+  // persist:false — the manifest file's own manifest does not enter the file
+  // list (${rootCid}.manifest.json is only the locator for the registry entry);
+  // the task is persisted as usual and the verify path skips listing per
+  // persistManifest
+  const outer = await publishPrepared(api, prepared, signer, (stage, detail) => onStage?.(stage, detail), {}, { persist: false })
   return { manifestCid: outer.rootCid, height: outer.txs[0].height, txHash: outer.txs[0].txHash }
 }

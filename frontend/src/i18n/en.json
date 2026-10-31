@@ -386,7 +386,9 @@
     "boxNoEncryptionPublicKey": "Wallet did not return an encryption public key",
     "paywallNotConfigured": "Paywall contract address is not configured",
     "paywallNotEncrypted": "This manifest is not encrypted — nothing to deliver",
-    "publishPendingVerify": "Publish result pending verification: the transaction was submitted but confirmation did not finish ({0}). Recovery data is saved — use “Verify” on the files page later. Do not re-upload the same file."
+    "publishPendingVerify": "Publish result pending verification: the transaction was submitted but confirmation did not finish ({0}). Recovery data is saved — use “Verify” on the files page later. Do not re-upload the same file.",
+    "paywallLegacyFrozen": "The legacy paywall contract is frozen (security review): new listings, purchases and deliveries are rejected until PaywallV2 is deployed.",
+    "paywallPayeeMismatch": "Refusing to confirm: the current listing seller no longer matches the order seller ({0}) — confirming would release funds to the wrong address."
   },
   "messages": {
     "title": "On-chain Private Messages",
@@ -463,7 +465,10 @@
     "withdrawLegacy": "Withdraw {0} AI3 (legacy)",
     "legacyTag": "legacy",
     "refundBtn": "Refund",
-    "refundedOk": "Refunded in full."
+    "refundedOk": "Refunded in full.",
+    "legacyFrozenNotice": "The paywall v1 contract is frozen (security review): new listings, purchases and deliveries are disabled. Existing orders keep refund / confirm / withdraw.",
+    "legacyListFrozen": "Listing is disabled while the v1 contract is frozen — available after PaywallV2 deployment.",
+    "legacyFrozenShort": "v1 frozen"
   },
   "publishPending": {
     "title": "{0} publish result(s) pending verification",
@@ -473,6 +478,9 @@
     "dismiss": "Dismiss",
     "dismissConfirm": "Dismissing removes the hash-based recovery handle; if the content is actually on-chain, re-uploading will pay the byte fee again. Dismiss anyway?",
     "notFound": "Transactions still not found on-chain — try again later (they may still be in the pool).",
-    "recovered": "Verified and manifest recovered: {0}"
+    "recovered": "Verified and manifest recovered: {0}",
+    "emptyTask": "No transaction hashes recorded — nothing was submitted from this task (it was interrupted before the first signature). Dismiss it.",
+    "incomplete": "Publish incomplete: {0} node(s) were never submitted (signing stopped partway). The missing nodes are not covered by this task — dismiss it and re-upload if needed.",
+    "coverageGap": "Verified transactions do not carry all expected nodes ({0} of {1} missing on-chain) — refusing to build an incomplete manifest."
   }
 }

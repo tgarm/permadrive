@@ -14,11 +14,15 @@
 // shadow the correct delivery. v1 (no binding fields) still parses, for legacy
 // orders only.
 //
-// Dual-instance strategy: the v1 Paywall carries a seller-overwrite flaw and is
-// frozen read-only — once paywallV2Address is configured it becomes the active
-// instance (all new actions go through v2) while v1 keeps refund/confirm/
-// withdraw entries for existing orders only; while v2 is unconfigured, v1
-// remains the sole active instance (current behavior). The v2 order model:
+// Dual-instance strategy (R01 deployment handling + second review F01):
+// the v1 Paywall carries a seller-overwrite flaw and is frozen read-only —
+// new purchases/listings/deliveries are rejected at the WRITE LAYER (even
+// while v2 is undeployed, so the flawed contract cannot absorb new orders);
+// v1 keeps refund/confirm/withdraw entries for existing-order disposition
+// only (confirm additionally verifies the current payee, see
+// assertLegacyPayee). While v2 is unconfigured, paid downloads are entirely
+// unavailable — that is the intended state until PaywallV2 is deployed. The
+// v2 order model:
 // Order snapshots seller/price/feeBps (delist/reprice never affect escrowed
 // orders), independent increasing orderIds (repurchase history preserved),
 // and purchase names the seller plus a maxPrice bound.
@@ -105,17 +109,47 @@ async function paywallWrite(op: Promise<`0x${string}`>): Promise<`0x${string}`> 
   return hash
 }
 
+// F01 (second design review): the legacy freeze does not stop at copy — the
+// write layer rejects too. purchase/setPrice/markDelivered create new orders
+// or new escrows, where the R01 flaw still applies; refund/confirm/withdraw
+// are existing-fund disposition and stay open (confirm additionally verifies
+// the payee, see assertLegacyPayee). The UI hides the entries too — this is
+// the second gate.
+export function assertPaywallV2Active(): void {
+  if (!paywallV2Active()) throw new Error(t('errors.paywallLegacyFrozen'))
+}
+
+/**
+ * F01: a legacy order's "confirm receipt" settles to the CURRENT listing on
+ * the v1 contract — the listing can be overwritten by anyone, so the current
+ * payee must be verified to still be the order's seller before confirming.
+ * Skipped when the seller is unknown (e.g. delisted after purchase): the
+ * deal's price was snapshotted and funds flow to listing.seller — the UI says
+ * so.
+ */
+export async function assertLegacyPayee(manifestCid: string | null, expectedSeller: string): Promise<void> {
+  if (!manifestCid || !expectedSeller) return
+  const listing = await getListing(manifestCid)
+  if (listing && listing.seller.toLowerCase() !== expectedSeller.toLowerCase()) {
+    throw new Error(t('errors.paywallPayeeMismatch'))
+  }
+}
+
 const writeOps = (signer: EvmSigner) => {
   const wallet = walletClientFor(signer)
   const account = accountOf(signer)
   const base = { address: paywallAddress(), abi: PAYWALL_ABI, chain: autoEvmChain, account } as const
   return {
+    // setPrice/purchase/markDelivered are kept for type completeness only —
+    // the three exported wrappers hit the F01 guard first, which always
+    // throws, so these constructors never execute
     setPrice: (key: `0x${string}`, price: bigint) =>
       wallet.writeContract({ ...base, functionName: 'setPrice', args: [key, price] }),
     purchase: (key: `0x${string}`, price: bigint) =>
       wallet.writeContract({ ...base, functionName: 'purchase', args: [key], value: price }),
     markDelivered: (key: `0x${string}`, buyer: `0x${string}`) =>
       wallet.writeContract({ ...base, functionName: 'markDelivered', args: [key, buyer] }),
+    // existing-order disposition entries only
     confirmReceipt: (key: `0x${string}`) =>
       wallet.writeContract({ ...base, functionName: 'confirmReceipt', args: [key] }),
     refund: (key: `0x${string}`) =>
@@ -127,14 +161,24 @@ const writeOps = (signer: EvmSigner) => {
   }
 }
 
-export const setListingPrice = (signer: EvmSigner, manifestCid: string, priceWei: bigint) =>
-  paywallWrite(writeOps(signer).setPrice(listingKey(manifestCid), priceWei))
+// F01: the three legacy writes below are always rejected (regardless of whether
+// v2 is deployed — the v1 freeze is absolute; the R01 flaw does not disappear
+// because v2 exists). The UI removed the entries too; the guard throws
+// synchronously so writeContract is never reached.
+export const setListingPrice = (signer: EvmSigner, manifestCid: string, priceWei: bigint): Promise<`0x${string}`> => {
+  assertPaywallV2Active() // always throws: legacy setPrice is frozen
+  return paywallWrite(writeOps(signer).setPrice(listingKey(manifestCid), priceWei))
+}
 
-export const purchase = (signer: EvmSigner, manifestCid: string, priceWei: bigint) =>
-  paywallWrite(writeOps(signer).purchase(listingKey(manifestCid), priceWei))
+export const purchase = (signer: EvmSigner, manifestCid: string, priceWei: bigint): Promise<`0x${string}`> => {
+  assertPaywallV2Active() // always throws: legacy purchase is frozen
+  return paywallWrite(writeOps(signer).purchase(listingKey(manifestCid), priceWei))
+}
 
-export const markDelivered = (signer: EvmSigner, manifestCid: string, buyer: string) =>
-  paywallWrite(writeOps(signer).markDelivered(listingKey(manifestCid), buyer as `0x${string}`))
+export const markDelivered = (signer: EvmSigner, manifestCid: string, buyer: string): Promise<`0x${string}`> => {
+  assertPaywallV2Active() // always throws: legacy markDelivered is frozen
+  return paywallWrite(writeOps(signer).markDelivered(listingKey(manifestCid), buyer as `0x${string}`))
+}
 
 export const confirmReceipt = (signer: EvmSigner, manifestCid: string) =>
   paywallWrite(writeOps(signer).confirmReceipt(listingKey(manifestCid)))
@@ -503,6 +547,7 @@ export async function deliverKey(
   buyer: string,
   getPassphrase: () => Promise<string | null>,
 ): Promise<{ messageTxHash: string; deliveredTxHash: string }> {
+  assertPaywallV2Active() // F01: legacy delivery is frozen (before any message/tx is sent)
   if (!manifest?.encryption) throw new Error(t('errors.paywallNotEncrypted'))
   // self-trade (acceptance path): buyer == seller, the pdgrant channel is unnecessary — only markDelivered
   if (buyer.toLowerCase() === signer.address.toLowerCase()) {

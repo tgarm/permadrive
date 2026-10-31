@@ -112,9 +112,10 @@ export function FilesPage() {
     setVerifyingId(record.id)
     try {
       const api = await connect()
+      // verifyPublishTask internally: coverage verification (F02) + the manifest
+      // persisted in the same transaction that deletes the task (F03)
       const manifest = await verifyPublishTask(api, record)
       if (manifest) {
-        await putManifest(manifest)
         setNotice(t('publishPending.recovered', [manifest.file.name]))
       } else {
         setNotice(t('publishPending.notFound'))
@@ -267,7 +268,8 @@ export function FilesPage() {
         (stage, detail) => setUpload((cur) => (cur ? { ...cur, stage, detail } : cur)),
         overrides,
       )
-      await putManifest(manifest)
+      // publishPrepared already persisted the manifest in the same transaction
+      // that deleted the task (F03)
       setUpload(null)
       setUploadPassphrase('')
       setNotice(t('files.publishedNotice', [manifest.txs[0].height, manifest.txs[0].txHash.slice(0, 18) + '…']))

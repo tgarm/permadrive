@@ -57,6 +57,17 @@ export interface PublishTaskRecord {
   totalBytes: number
   startHeight: number
   txHashes: string[]
+  /** F02 (second design review): aligned with txHashes — the number of DAG nodes
+   * each transaction carries (batch=[N], per-tx=[1,1,…]). null = a task created
+   * before this field existed; coverage checking degrades to on-chain extraction */
+  txNodes: number[] | null
+  /** F03: chain name and uploader address captured at publish time — manifest
+   * reconstruction no longer depends on a trailing network call */
+  network: string | null
+  uploader: string | null
+  /** F03: whether the manifest goes into the manifests store (false for the
+   * manifest file's own publish, so ${rootCid}.manifest.json stays out of the file list) */
+  persistManifest: boolean
   status: 'pending-verify' | 'confirmed'
   lastError: string | null
   createdAt: number
@@ -209,6 +220,22 @@ export const putPublishTask = (task: PublishTaskRecord): Promise<void> =>
 export const deletePublishTask = (id: string): Promise<void> =>
   tx(TASKS, 'readwrite', (s) => s.delete(id)).then(() => undefined)
 
+// F03 (second design review): manifest persistence and task deletion in ONE
+// transaction — either both land or neither, eliminating the window where the
+// bytes were already spent but the task was deleted and the manifest never written
+export const putManifestAndDeleteTask = (manifest: Manifest, taskId: string): Promise<void> =>
+  openDb().then(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const t = db.transaction([MANIFESTS, TASKS], 'readwrite')
+        t.oncomplete = () => resolve()
+        t.onabort = () => reject(t.error ?? new Error('indexedDB transaction aborted'))
+        t.onerror = () => reject(t.error ?? new Error('indexedDB transaction error'))
+        t.objectStore(MANIFESTS).put(manifest)
+        t.objectStore(TASKS).delete(taskId)
+      }),
+  )
+
 // ---- registry mapping ----
 
 export const listRegistryRecords = (): Promise<RegistryRecord[]> =>
@@ -332,7 +359,12 @@ export const putMessage = (message: MessageRecord): Promise<void> =>
 
 // R08: the message batch and cursor commit in one transaction — a failed batch
 // never advances the cursor
-export const putMessagesWithCursor = (messages: MessageRecord[], cursorKey: string, cursorValue: unknown): Promise<void> =>
+// R08: message batch and cursor commit in one transaction — a failed batch never
+// advances the cursor (no loss, no duplication). F04 (second design review):
+// orphan invalidation in the same transaction — log records inside the rescan
+// window that no longer exist on-chain (reorg orphans) are deleted, so dead
+// grants can no longer be used for order downloads
+export const putMessagesWithCursor = (messages: MessageRecord[], cursorKey: string, cursorValue: unknown, deleteIds: string[] = []): Promise<void> =>
   openDb().then(
     (db) =>
       new Promise<void>((resolve, reject) => {
@@ -347,6 +379,7 @@ export const putMessagesWithCursor = (messages: MessageRecord[], cursorKey: stri
             messages_.put(mergeMessage(getReq.result as MessageRecord | undefined, m))
           }
         }
+        for (const id of deleteIds) messages_.delete(id)
         t.objectStore(META).put({ key: cursorKey, value: cursorValue } satisfies MetaRecord)
       }),
   )

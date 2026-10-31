@@ -157,12 +157,20 @@ function decodeEventId(log: { topics: readonly `0x${string}`[] } | undefined): n
   return Number(BigInt(log.topics[1]))
 }
 
-// ---- receiving (getLogs + cursor; R03/R04 redesign) ----
+// ---- receiving (getLogs + cursor; R03/R04 redesign, F04 second review) ----
 // Sync and decryption are separated: syncMessages only pulls ciphertexts
 // (decryptStatus='locked') — the cursor means "logs persisted", nothing more.
 // Decryption is independent (local can auto-decrypt offline; injected must be
 // user-initiated so background polling never spams wallet prompts). Failures
 // persist their reason and are retryable per message without blocking others.
+//
+// F04: the cursor value is { nextBlock, checkpoint:{height,hash} } — nextBlock
+// is "the next block to scan" and the checkpoint stores the block hash at that
+// SAME height (the old code stored the hash of toBlock paired with a query
+// height of toBlock+1, so even a perfectly healthy chain mismatched on every
+// sync and misdetected a reorg). Reorg rewind only rescans/merges; log records
+// inside the rescan window that no longer exist on-chain are deleted in the
+// same transaction (orphaned messages and dead grants leave no residue).
 
 export interface SyncResult {
   scanned: number
@@ -172,25 +180,79 @@ export interface SyncResult {
   toBlock: number
 }
 
+export interface MailboxCursor {
+  nextBlock: number
+  checkpoint: { height: number; hash: string } | null
+}
+
+/** Cursor value normalization: current format {nextBlock, checkpoint}; legacy
+ * {block, blockHash} (block = nextBlock, blockHash was the hash of block-1 —
+ * exactly the same pairing the new semantics express); older still, a plain
+ * block number (no checkpoint). Anything malformed resets to zero (rescanning
+ * extra is idempotent-merged, so that is always safe) */
+export function normalizeCursor(raw: unknown): MailboxCursor {
+  if (raw && typeof raw === 'object' && 'nextBlock' in raw) {
+    const r = raw as { nextBlock: unknown; checkpoint: unknown }
+    const cp = r.checkpoint as { height: unknown; hash: unknown } | null
+    return {
+      nextBlock: Number(r.nextBlock) || 0,
+      checkpoint: cp && typeof cp.height === 'number' && typeof cp.hash === 'string' ? { height: cp.height, hash: cp.hash } : null,
+    }
+  }
+  if (raw && typeof raw === 'object' && 'block' in raw) {
+    const block = Number((raw as { block: unknown }).block) || 0
+    const hash = (raw as unknown as { blockHash: unknown }).blockHash
+    return { nextBlock: block, checkpoint: block > 0 && typeof hash === 'string' && hash ? { height: block - 1, hash } : null }
+  }
+  if (typeof raw === 'number' && raw > 0) return { nextBlock: raw, checkpoint: null }
+  return { nextBlock: 0, checkpoint: null }
+}
+
 // The cursor is isolated by the (chainId, contract, account) triple (R04:
 // switching contracts/chains never shares a cursor)
 export const cursorKeyFor = (contract: string, account: string): string =>
   `mailboxCursor:${autoEvmChain.id}:${contract}:${account.toLowerCase()}`
 
-// The legacy cursor key held only the address (value = plain block number) —
-// migrated once to the triple key
-async function loadCursor(contract: string, account: string): Promise<{ block: number; blockHash: string | null }> {
-  const key = cursorKeyFor(contract, account)
-  const cur = await getMeta<{ block: number; blockHash: string | null }>(key)
-  if (cur) return { block: Number(cur.block) || 0, blockHash: cur.blockHash ?? null }
-  const legacy = await getMeta<number>(`mailboxCursor:${account.toLowerCase()}`)
-  if (typeof legacy === 'number' && legacy > 0) return { block: legacy, blockHash: null }
-  return { block: 0, blockHash: null }
+async function loadCursor(contract: string, account: string): Promise<MailboxCursor> {
+  const cur = normalizeCursor(await getMeta(cursorKeyFor(contract, account)))
+  if (cur.nextBlock > 0) return cur
+  // The legacy cursor key held only the address (value = plain block number) —
+  // migrated once to the triple key
+  const legacy = normalizeCursor(await getMeta<number>(`mailboxCursor:${account.toLowerCase()}`))
+  return legacy.nextBlock > 0 ? legacy : { nextBlock: 0, checkpoint: null }
 }
 
 // Scan lookback window: rescan a few blocks before the cursor (idempotent
-// merge, covers shallow reorgs around the cursor write)
+// merge + orphan invalidation, covers shallow reorgs around the cursor write)
 const RESCAN_LOOKBACK = 64
+
+/**
+ * F04: orphan invalidation — records of this contract/chain inside the rescan
+ * window [fromBlock, toBlock] that this canonical scan did not reproduce are
+ * reorg orphans; returns the ids to delete. Records without a block number
+ * (0/undefined, legacy) never participate in deletion (conservative). Pure
+ * function so it can be tested offline.
+ */
+export function staleMessageIds(
+  all: MessageRecord[],
+  contract: string,
+  chainId: number,
+  fromBlock: number,
+  toBlock: number,
+  seenIds: ReadonlySet<string>,
+): string[] {
+  const prefix = `${contract}:`
+  return all
+    .filter(
+      (m) =>
+        m.id.startsWith(prefix) &&
+        (m.chainId ?? 870) === chainId &&
+        (m.blockNumber ?? 0) >= fromBlock &&
+        (m.blockNumber ?? 0) <= toBlock &&
+        !seenIds.has(m.id),
+    )
+    .map((m) => m.id)
+}
 
 // Per-account sync guard: an in-flight sync for the same (contract, account) is reused
 const syncInFlight = new Map<string, Promise<SyncResult>>()
@@ -206,24 +268,36 @@ export async function syncMessages(me: string, signer: EvmSigner | null): Promis
   return p
 }
 
+/** F04: the cursor value after a completed sync — nextBlock = toBlock+1, and
+ * the checkpoint records toBlock's OWN height/hash (the same-height pairing is
+ * guaranteed by construction; the old code stored toBlock's hash against a
+ * toBlock+1 query height, which misdetected a reorg on every healthy sync).
+ * Extracted as a pure function so tests can assert the invariant */
+export const cursorAfterSync = (toBlock: number, hash: string | null): MailboxCursor => ({
+  nextBlock: toBlock + 1,
+  checkpoint: toBlock > 0 && hash ? { height: toBlock, hash } : null,
+})
+
 async function syncMessagesInner(meLower: string, contract: string, signer: EvmSigner | null): Promise<SyncResult> {
   const deployBlock = loadConfig().mailboxDeployBlock
   let cursor = await loadCursor(contract, meLower)
-  if (cursor.block < deployBlock) cursor = { block: deployBlock, blockHash: null }
-  // Reorg check (R04): checkpoint blockHash no longer matches the chain → rewind
-  // the window and rescan (merge is idempotent)
-  if (cursor.blockHash) {
+  if (cursor.nextBlock < deployBlock) cursor = { nextBlock: deployBlock, checkpoint: null }
+  // Reorg check (R04/F04): the checkpoint's height and hash are compared at the
+  // SAME height — mismatch → rewind the window and rescan (idempotent merge,
+  // with orphan deletion as the backstop)
+  if (cursor.checkpoint) {
+    const cp = cursor.checkpoint
     try {
-      const checkpoint = await registryPublicClient().getBlock({ blockNumber: BigInt(cursor.block) })
-      if (checkpoint.hash.toLowerCase() !== cursor.blockHash.toLowerCase()) {
-        cursor = { block: Math.max(deployBlock, cursor.block - RESCAN_LOOKBACK), blockHash: null }
+      const checkpoint = await registryPublicClient().getBlock({ blockNumber: BigInt(cp.height) })
+      if (checkpoint.hash.toLowerCase() !== cp.hash.toLowerCase()) {
+        cursor = { nextBlock: Math.max(deployBlock, cp.height - RESCAN_LOOKBACK), checkpoint: null }
       }
     } catch {
       // the checkpoint block is no longer readable (deep reorg) — rewind too
-      cursor = { block: Math.max(deployBlock, cursor.block - RESCAN_LOOKBACK), blockHash: null }
+      cursor = { nextBlock: Math.max(deployBlock, cp.height - RESCAN_LOOKBACK), checkpoint: null }
     }
   }
-  const fromBlock = Math.max(deployBlock, cursor.block - RESCAN_LOOKBACK)
+  const fromBlock = Math.max(deployBlock, cursor.nextBlock - RESCAN_LOOKBACK)
   const latest = await registryPublicClient().getBlockNumber()
   const toBlock = Number(latest)
   if (toBlock < fromBlock) return { scanned: 0, inbox: 0, outbox: 0, fromBlock, toBlock }
@@ -250,16 +324,19 @@ async function syncMessagesInner(meLower: string, contract: string, signer: EvmS
     }
   }
 
-  // store ciphertexts only; the batch + cursor commit in one transaction (a
-  // failed batch never advances the cursor, R08)
+  // store ciphertexts only; the batch + orphan deletions + cursor commit in one
+  // transaction (a failed batch advances nothing, R08)
   const records: Parameters<typeof putMessagesWithCursor>[0] = []
+  const seenIds = new Set<string>()
   for (const log of [...inbox, ...outbox]) {
     const args = log.args
     // viem event args can be undefined (anonymous-log convention) — skip incomplete
     if (!args || !args.from || !args.to || !args.content || args.sentAt == null) continue
     const isInbox = inbox.includes(log)
+    const id = `${contract}:${Number(args.id)}:${log.transactionHash}`
+    seenIds.add(id)
     records.push({
-      id: `${contract}:${Number(args.id)}:${log.transactionHash}`,
+      id,
       eventId: Number(args.id),
       from: args.from.toLowerCase(),
       to: args.to.toLowerCase(),
@@ -276,11 +353,17 @@ async function syncMessagesInner(meLower: string, contract: string, signer: EvmS
       decryptError: null,
     })
   }
+  // F04: old records inside the window that this scan did not reproduce are
+  // reorg orphans — deleted in the same transaction
+  const staleIds = staleMessageIds(await listMessages(), contract, autoEvmChain.id, fromBlock, toBlock, seenIds)
+  // the checkpoint is toBlock itself (height and hash at the same height) —
+  // the next sync compares at that same height
   const checkpoint = toBlock > 0 ? await registryPublicClient().getBlock({ blockNumber: latest }).catch(() => null) : null
   await putMessagesWithCursor(
     records,
     cursorKeyFor(contract, meLower),
-    { block: toBlock + 1, blockHash: checkpoint ? String(checkpoint.hash) : null },
+    cursorAfterSync(toBlock, checkpoint ? String(checkpoint.hash) : null),
+    staleIds,
   )
 
   // local signers can decrypt offline (no user interaction) — decrypt right
