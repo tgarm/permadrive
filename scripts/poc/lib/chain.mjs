@@ -4,7 +4,7 @@
 // subscriptions/requests (measured); polling + throttling is more stable. Finality is judged via
 // chain_getFinalizedHead (stronger than AutoDrive's confirmationDepth probabilistic confirmation).
 
-import { ApiPromise } from '@polkadot/api'
+import { ApiPromise, Keyring } from '@polkadot/api'
 import { PacedHttpProvider, sleep } from './rpc.mjs'
 import { cidOfNode, cidToString, tryDecodeRemark } from './dag.mjs'
 
