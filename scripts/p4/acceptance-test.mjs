@@ -1,17 +1,17 @@
 // P4 · acceptance runner pure-offline fault-injection tests (the acceptance runbook's
-// "minimum retest requirements").
+// "minimum retest requirements", reworked for the direct-sales paths).
 //
 // Scenarios covered (all zero-network, zero-cost — a mock EVM plus a mock consensus
 // chain; asserts: no duplicate broadcasts, no skipped paths, no false "passed"):
-//   S1  full first run (c,b,a; the old code hit the price TDZ ReferenceError here)
+//   S1  full first run (d1,d2,a; single consensus submission; funds reconciled)
 //   S2  resume without input.json — rejected with zero broadcasts
 //   S3  purchase accepted by the node but the response lost — no resend; resume verifies
 //       by hash and completes
 //   S4  receipt wait timeout — no resend; resume verifies and completes
 //   S5  on-chain reverted (unknown) re-entry — read-only verification halts, no new
 //       writes, report says blocked (never passed)
-//   S6  C/B cross-process wait (exit 3 + nextEligibleAt) then resume — restored from the
-//       frozen plan: B not lost, A not run
+//   S6  D2 rollback path standalone — expectRevert with zero purchase broadcasts,
+//       zero deals, funds reconciled
 //   S7  insufficient budget — input-legality check rejects with zero broadcasts
 //   S8  codeMismatch (on-chain code ≠ build artifact) — pre-write guard rejects, zero
 //       broadcasts
@@ -24,6 +24,8 @@
 // readContract/simulateContract/getLogs/getBalance/getBlockNumber/getBlock/getCode/
 // getGasPrice/getChainId/account.signMessage) and the minimal consensus api (tx builders/
 // signAsync/submitExtrinsic/chain.getHeader/getBlockHash/getBlock/query.transactionFees).
+// The mock contract follows DirectSales semantics (immutable revisions / exact payment /
+// instant three-way split / markKeySent / ratings with subtract-then-add vote changes).
 
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -51,8 +53,8 @@ function encodeEvent(abi, eventName, args) {
 }
 
 const ROOT = new URL('../../', import.meta.url).pathname
-const artifactV2 = JSON.parse(readFileSync(path.join(ROOT, 'contracts/out/PaywallV2.json'), 'utf8'))
-const mailboxArtifact = JSON.parse(readFileSync(path.join(ROOT, 'contracts/out/Mailbox.json'), 'utf8'))
+const artifactSales = JSON.parse(readFileSync(path.join(ROOT, 'contracts/out/DirectSales.json'), 'utf8'))
+const mailboxArtifact = JSON.parse(path.join(ROOT, 'contracts/out/Mailbox.json') ? readFileSync(path.join(ROOT, 'contracts/out/Mailbox.json'), 'utf8') : '{}')
 
 const A_ADDR = '0x' + 'a'.repeat(40)
 const C_ADDR = '0x' + 'c'.repeat(40)
@@ -62,13 +64,13 @@ const REG = '0x' + '3'.repeat(40)
 const MBX = '0x' + '4'.repeat(40)
 const V1M = '0x' + '5'.repeat(40)
 const V1T = '0x' + '6'.repeat(40)
+const ZERO = '0x0000000000000000000000000000000000000000'
 
 const AI3 = 10n ** 18n
 const GAS_PRICE = 11n * 10n ** 9n
-const COMBINED_ABI = [...artifactV2.abi, ...REGISTRY_ABI, ...mailboxArtifact.abi]
+const COMBINED_ABI = [...artifactSales.abi, ...REGISTRY_ABI, ...mailboxArtifact.abi]
 const GAS_BY_FN = {
-  setPrice: 80_000n, purchase: 150_000n, markDelivered: 60_000n, refund: 90_000n,
-  confirmReceipt: 120_000n, release: 120_000n, withdraw: 60_000n,
+  createRevision: 120_000n, purchase: 150_000n, markKeySent: 60_000n, rate: 90_000n, delist: 50_000n,
   announceEncryptionKey: 90_000n, send: 120_000n, register: 150_000n,
 }
 
@@ -91,6 +93,7 @@ function makeMockConsensus(clock) {
   let pendingTx = null
   const mkTx = (nodeBytesList) => {
     const tx = { // the most recently constructed tx is the pending submission
+      _pending: true,
       nodeBytesList,
       encodedLength: nodeBytesList.reduce((a, b) => a + b.length + 200, 0),
       hash: null,
@@ -135,7 +138,7 @@ function makeMockConsensus(clock) {
       },
       author: {
         submitExtrinsic: async (hex) => {
-          if (!pendingTx || pendingTx.toHex() !== hex) throw new Error('mock: submitted hex does not match the constructed tx')
+          if (!pendingTx || pendingTx.toHex() !== hex) throw new Error(`mock: submitted hex does not match the constructed tx (got ${hex.slice(0, 20)}… pending ${pendingTx ? pendingTx.toHex().slice(0, 20) + '…' : 'null'})`)
           include(pendingTx)
         },
       },
@@ -153,7 +156,7 @@ function makeMockConsensus(clock) {
     consensus: {
       connect: async () => ({ api, pair: { address: 'mock-consensus-pair' } }),
       extract: async (_api, hashHex) => {
-        const b = getBlockBy(typeof hashHex === 'string' ? hashHex : hashHex.toHex())
+        const b = getBlockBy(hashHex)
         const found = new Map()
         if (b) for (const t of b.txs) for (const e of t.entries) found.set(e.cid, { bytes: e.bytes })
         return { found, block: b }
@@ -162,7 +165,7 @@ function makeMockConsensus(clock) {
   }
 }
 
-// ---------- mock EVM ----------
+// ---------- mock EVM (DirectSales semantics) ----------
 
 function makeMockEvm(faults = {}, clock = { t: 0 }, opts = {}) {
   const state = {
@@ -182,85 +185,133 @@ function makeMockEvm(faults = {}, clock = { t: 0 }, opts = {}) {
   const L = (a) => a.toLowerCase()
   const bal = (a) => state.balances.get(L(a)) ?? 0n
   const credit = (a, d, deltas) => { deltas.push([L(a), d]) } // enqueue only; sendRawTransaction applies them (prevents double-counting)
-  const lidOf = (seller, key) => keccak256(encodePacked(['address', 'bytes32'], [seller, key]))
+  const lidOf = (seller, fileKey) => keccak256(encodePacked(['address', 'bytes32'], [seller, fileKey]))
 
-  function paywallContract(cfg) {
-    const c = { listings: new Map(), orders: new Map(), orderSeq: 0, credits: new Map(), ...cfg }
+  function salesContract(cfg) {
+    // revisions: lid → { count, current, revs: Map(rid → rev) }; the listing log is append-only
+    const c = { orders: new Map(), orderSeq: 0, listingCount: 0, listingLog: [], revisions: new Map(), votes: new Map(), rating: new Map(), ...cfg }
     return {
       view(fn, args) {
-        if (fn === 'listingPrice') return c.listings.get(lidOf(args[0], args[1]))?.price ?? 0n
-        if (fn === 'orders') {
-          const o = c.orders.get(Number(args[0]))
-          return o ? [getAddress(o.seller), getAddress(o.buyer), o.price, o.feeBps, o.state, BigInt(o.purchasedAt), BigInt(o.deliveredAt)] : ['0x0'.padEnd(42, '0'), '0x0'.padEnd(42, '0'), 0n, 0, 0, 0n, 0n]
+        const R = c.revisions.get(args[0])
+        if (fn === 'currentRevision') return BigInt(R?.current ?? 0)
+        if (fn === 'revisionOf') {
+          const r = R?.revs.get(Number(args[1]))
+          return r
+            ? [r.price, 0n, r.platformBps, r.providerBps, r.deliveryMode, r.seller, r.provider, r.providerPayout, r.fileKey, r.termsHash, r.revoked]
+            : [0n, 0n, 0, 0, 0, ZERO, ZERO, ZERO, '0x' + '0'.repeat(64), '0x' + '0'.repeat(64), false]
         }
-        if (fn === 'credits') return c.credits.get(args[0]) ?? 0n
-        if (fn === 'deliveryTimeout') return c.deliveryTimeout
-        if (fn === 'gracePeriod') return c.gracePeriod
-        if (fn === 'feeBps') return c.feeBps
-        if (fn === 'treasury') return c.treasury
+        if (fn === 'orderOf') {
+          const o = c.orders.get(Number(args[0]))
+          return o
+            ? [o.revision, o.price, o.platformBps, o.providerBps, o.state, BigInt(o.purchasedAt), o.buyer, o.seller, o.provider, o.providerPayout, o.fileKey]
+            : [0n, 0n, 0, 0, 0, 0n, ZERO, ZERO, ZERO, ZERO, '0x' + '0'.repeat(64)]
+        }
+        if (fn === 'ratingOf') {
+          const r = c.rating.get(args[0]) ?? { up: 0n, down: 0n, buyers: 0n }
+          return [r.up, r.down, r.buyers]
+        }
+        if (fn === 'serviceUp') return BigInt(c.rating.get(args[0])?.svcUp?.get(args[1]) ?? 0n)
+        if (fn === 'serviceDown') return BigInt(c.rating.get(args[0])?.svcDown?.get(args[1]) ?? 0n)
+        if (fn === 'voteOf') {
+          const v = c.votes.get(`${args[0]}|${args[1]}`) ?? { choice: 0, orderId: 0n }
+          return [v.choice, v.orderId]
+        }
         if (fn === 'orderCount') return BigInt(c.orderSeq)
-        throw new Error(`mock paywall: no view ${fn}`)
+        if (fn === 'listingCount') return BigInt(c.listingCount)
+        if (fn === 'listingLog') return c.listingLog[Number(args[0])] ?? '0x' + '0'.repeat(64)
+        if (fn === 'treasury') return c.treasury
+        if (fn === 'platformBps') return c.platformBps
+        throw new Error(`mock sales: no view ${fn}`)
       },
       apply(fn, args, from, value, dryRun) {
         const deltas = []
         const logs = []
         const now = () => Math.floor(clock.t / 1000)
-        const settle = (orderId, o) => {
-          const price = o.price
-          const fee = (price * BigInt(o.feeBps)) / 10_000n
-          const net = price - fee
-          o.state = 3
-          c.credits.set(o.seller, (c.credits.get(o.seller) ?? 0n) + net) // real semantics: net lands in credits, withdrawn at A15
-          credit(c.treasury, fee, deltas) // the fee goes straight to treasury, immediately spendable
-          logs.push({ eventName: 'Released', args: { orderId: BigInt(orderId), net, fee } })
-        }
         const guard = (cond, reason) => { if (!cond) throw Object.assign(new Error(reason), { reason }) }
-        if (fn === 'setPrice') {
+        if (fn === 'createRevision') {
+          const [fileKey, price, provider, providerPayout, providerBps, deliveryMode, termsHash, expiry] = args
+          guard(price > 0n, 'BadPrice')
+          guard(deliveryMode === 0 || deliveryMode === 1, 'BadMode')
+          if (Number(deliveryMode) === 0) guard(provider === ZERO && providerPayout === ZERO && Number(providerBps) === 0, 'BadMode')
+          const lid = lidOf(from, fileKey)
+          const R = c.revisions.get(lid) ?? { count: 0, current: 0, revs: new Map() }
+          const rid = R.count + 1
+          R.count = rid
+          R.current = rid
+          R.revs.set(rid, { price, platformBps: c.platformBps, providerBps: Number(providerBps), deliveryMode: Number(deliveryMode), seller: from, provider, providerPayout, fileKey, termsHash, revoked: false })
+          if (rid === 1) { c.listingLog.push(lid); c.listingCount++ } // appended on first listing
+          c.revisions.set(lid, R)
+          logs.push({ eventName: 'Revised', args: { listingId: lid, seller: from, revision: BigInt(rid), price, provider, providerBps: BigInt(Number(providerBps)), deliveryMode: BigInt(Number(deliveryMode)), termsHash, attestationExpiry: expiry ?? 0n } })
+          return { deltas, logs }
+        }
+        if (fn === 'delist') {
           const lid = lidOf(from, args[0])
-          const prev = c.listings.get(lid)?.price ?? 0n
-          if (args[1] === 0n) { c.listings.delete(lid); if (prev !== 0n) logs.push({ eventName: 'Unlisted', args: { seller: from, listingId: lid, key: args[0] } }) }
-          else { c.listings.set(lid, { seller: from, key: args[0], price: args[1] }); logs.push({ eventName: 'Listed', args: { seller: from, listingId: lid, key: args[0], price: args[1] } }) }
-        } else if (fn === 'purchase') {
-          const [key, seller, maxPrice] = args
-          const l = c.listings.get(lidOf(seller, key))
-          guard(l && l.price !== 0n, 'NotListed')
-          guard(l.price <= maxPrice, 'PriceTooHigh')
-          guard(value >= l.price, 'InsufficientPayment')
+          const R = c.revisions.get(lid)
+          guard(R && R.current !== 0, 'NotListed')
+          R.current = 0
+          logs.push({ eventName: 'Unlisted', args: { listingId: lid, seller: from } })
+          return { deltas, logs }
+        }
+        if (fn === 'purchase') {
+          const [listingId, expectedRevision, maxPrice, maxPlatformBps, maxProviderBps] = args
+          const R = c.revisions.get(listingId)
+          guard(R && R.current !== 0, 'NotListed')
+          guard(BigInt(R.current) === BigInt(expectedRevision), 'NotCurrentRevision')
+          const rev = R.revs.get(Number(R.current))
+          guard(rev.price <= maxPrice, 'PriceTooHigh')
+          guard(rev.platformBps <= Number(maxPlatformBps), 'BpsTooHighPlatform')
+          guard(rev.providerBps <= Number(maxProviderBps), 'BpsTooHighProvider')
+          guard(value === rev.price, 'ExactPaymentRequired') // exact payment (no overpay refund)
           const id = ++c.orderSeq
-          c.orders.set(id, { seller, buyer: from, price: l.price, feeBps: c.feeBps, state: 1, purchasedAt: now(), deliveredAt: 0 })
-          credit(from, -l.price, deltas); credit(c.self, l.price, deltas)
-          logs.push({ eventName: 'Purchased', args: { orderId: BigInt(id), buyer: from, seller, key, price: l.price } })
-        } else if (fn === 'markDelivered') {
+          const fee = (rev.price * BigInt(rev.platformBps)) / 10_000n
+          const pfee = (rev.price * BigInt(rev.providerBps)) / 10_000n
+          c.orders.set(id, { revision: BigInt(R.current), price: rev.price, platformBps: rev.platformBps, providerBps: rev.providerBps, state: 0, purchasedAt: now(), buyer: from, seller: rev.seller, provider: rev.provider, providerPayout: rev.providerPayout, fileKey: rev.fileKey })
+          if (from !== rev.seller) {
+            const r = c.rating.get(listingId) ?? { up: 0n, down: 0n, buyers: 0n, seen: new Set(), svcUp: new Map(), svcDown: new Map() }
+            if (!r.seen.has(from)) { r.seen.add(from); r.buyers += 1n }
+            c.rating.set(listingId, r)
+          }
+          credit(from, -rev.price, deltas)
+          credit(c.treasury, fee, deltas) // the platform fee lands immediately
+          credit(rev.seller, rev.price - fee - pfee, deltas) // the seller net lands immediately
+          if (pfee > 0n) credit(rev.providerPayout, pfee, deltas)
+          logs.push({ eventName: 'Purchased', args: { orderId: BigInt(id), buyer: from, seller: rev.seller, listingId, revision: BigInt(R.current), fileKey: rev.fileKey, provider: rev.provider, price: rev.price, platformBps: rev.platformBps, providerBps: rev.providerBps } })
+          return { deltas, logs }
+        }
+        if (fn === 'markKeySent') {
           const o = c.orders.get(Number(args[0]))
-          guard(o && o.seller === from, 'NotSeller'); guard(o.state === 1, 'BadState')
-          o.state = 2; o.deliveredAt = now()
-          logs.push({ eventName: 'Delivered', args: { orderId: BigInt(args[0]) } })
-        } else if (fn === 'refund') {
-          const o = c.orders.get(Number(args[0]))
-          guard(o && o.buyer === from, 'NotBuyer')
-          if (o.state === 1) guard(now() >= o.purchasedAt + Number(c.deliveryTimeout), 'BadState')
-          else if (o.state === 2) guard(now() < o.deliveredAt + Number(c.gracePeriod), 'BadState')
-          else guard(false, 'BadState')
-          o.state = 4
-          credit(c.self, -o.price, deltas); credit(from, o.price, deltas)
-          logs.push({ eventName: 'Refunded', args: { orderId: BigInt(args[0]), amount: o.price } })
-        } else if (fn === 'confirmReceipt') {
-          const o = c.orders.get(Number(args[0]))
-          guard(o && o.buyer === from, 'NotBuyer'); guard(o.state === 1 || o.state === 2, 'BadState')
-          settle(args[0], o)
-        } else if (fn === 'release') {
-          const o = c.orders.get(Number(args[0]))
-          guard(o && o.seller === from, 'NotSeller'); guard(o.state === 2, 'BadState')
-          guard(now() >= o.deliveredAt + Number(c.gracePeriod), 'BadState')
-          settle(args[0], o)
-        } else if (fn === 'withdraw') {
-          const amount = c.credits.get(from) ?? 0n
-          guard(amount > 0n, 'NothingToWithdraw')
-          c.credits.set(from, 0n)
-          credit(c.self, -amount, deltas); credit(from, amount, deltas)
-          logs.push({ eventName: 'Withdrawn', args: { seller: from, amount } })
-        } else throw new Error(`mock paywall: no apply ${fn}`)
-        return { deltas, logs }
+          guard(o, 'NotPurchased')
+          guard(from === o.seller || from === o.provider, 'NotOrderSellerOrProvider')
+          guard(o.state === 0, 'BadState')
+          o.state = 1
+          logs.push({ eventName: 'KeySent', args: { orderId: BigInt(args[0]), sender: from } })
+          return { deltas, logs }
+        }
+        if (fn === 'rate') {
+          const [orderId, positive] = args
+          const o = c.orders.get(Number(orderId))
+          guard(o, 'NotPurchased')
+          guard(o.buyer === from, 'NotBuyer')
+          guard(o.buyer !== o.seller, 'SelfRating')
+          const lid = lidOf(o.seller, o.fileKey)
+          const r = c.rating.get(lid) ?? { up: 0n, down: 0n, buyers: 0n, seen: new Set(), svcUp: new Map(), svcDown: new Map() }
+          const vkey = `${lid}|${from}`
+          const v = c.votes.get(vkey) ?? { choice: 0, orderId: 0n }
+          const newChoice = positive ? 1 : -1
+          if (v.choice !== newChoice) {
+            if (v.choice === 1) { r.up -= 1n; r.svcUp.set(o.provider, (r.svcUp.get(o.provider) ?? 0n) - 1n) }
+            else if (v.choice === -1) { r.down -= 1n; r.svcDown.set(o.provider, (r.svcDown.get(o.provider) ?? 0n) - 1n) }
+            if (positive) { r.up += 1n; r.svcUp.set(o.provider, (r.svcUp.get(o.provider) ?? 0n) + 1n) }
+            else { r.down += 1n; r.svcDown.set(o.provider, (r.svcDown.get(o.provider) ?? 0n) + 1n) }
+            v.choice = newChoice
+            v.orderId = BigInt(orderId)
+            c.votes.set(vkey, v)
+            c.rating.set(lid, r)
+            logs.push({ eventName: 'Rated', args: { listingId: lid, buyer: from, orderId: BigInt(orderId), positive, up: r.up, down: r.down } })
+          }
+          return { deltas, logs }
+        }
+        throw new Error(`mock sales: no apply ${fn}`)
       },
     }
   }
@@ -313,19 +364,13 @@ function makeMockEvm(faults = {}, clock = { t: 0 }, opts = {}) {
     }
   }
 
-  const testTimeout = BigInt(opts.testTimeout ?? 300)
-  const paywallMain = paywallContract({ self: MAIN, treasury: A_ADDR, feeBps: 1000, deliveryTimeout: 3n * 86400n, gracePeriod: 3n * 86400n })
-  const paywallTest = paywallContract({ self: TEST, treasury: A_ADDR, feeBps: 1000, deliveryTimeout: testTimeout, gracePeriod: testTimeout })
+  const salesMain = salesContract({ treasury: A_ADDR, platformBps: 1000 })
+  const salesTest = salesContract({ treasury: A_ADDR, platformBps: 1000 })
   const registry = registryContract()
   const mailbox = mailboxContract()
-  const contracts = new Map([[MAIN, paywallMain], [TEST, paywallTest], [REG, registry], [MBX, mailbox]])
+  const contracts = new Map([[MAIN, salesMain], [TEST, salesTest], [REG, registry], [MBX, mailbox]])
 
-  const testTimeoutCode = BigInt(opts.testTimeout ?? 300)
-  const expectCode = (addr) => patchImmutablesMulti(artifactV2, {
-    treasury: A_ADDR,
-    deliveryTimeout: addr === MAIN ? 3n * 86400n : testTimeoutCode,
-    gracePeriod: addr === MAIN ? 3n * 86400n : testTimeoutCode,
-  })
+  const expectCode = (addr) => patchImmutablesMulti(artifactSales, { treasury: A_ADDR })
 
   const mkClient = (rawAddr) => {
     const addr = getAddress(rawAddr) // viem account addresses are checksummed (apply compares from/seller against the same form)
@@ -370,7 +415,7 @@ function makeMockEvm(faults = {}, clock = { t: 0 }, opts = {}) {
       },
       simulateContract: async ({ address, functionName, args, value }) => {
         const c = contracts.get(address)
-        try { c.apply(functionName, args ?? [], addr, value ?? 0n, true) } catch (e) {
+        try { c.apply(functionName, args ?? [], addr ?? A_ADDR, value ?? 0n, true) } catch (e) {
           throw new Error(`simulation failed: execution reverted: ${e.reason ?? e.message}`)
         }
         return {}
@@ -396,9 +441,11 @@ function makeMockEvm(faults = {}, clock = { t: 0 }, opts = {}) {
           deltas = [[req.account.address, -gas]]
           status = 'failed'
         } else {
-          const r = contracts.get(req.to).apply(functionName, args, req.account.address, req.value)
-          deltas = [[req.account.address, -gas], ...r.deltas]
-          logs = r.logs
+          try {
+            const r = contracts.get(req.to).apply(functionName, args, req.account.address, req.value)
+            deltas = [[req.account.address, -gas], ...r.deltas]
+            logs = r.logs
+          } catch (e) { console.error('DEBUG mock apply throw:', functionName, e.message); throw e }
         }
         const block = state.block + 1
         state.block = block
@@ -429,37 +476,37 @@ function makeMockEvm(faults = {}, clock = { t: 0 }, opts = {}) {
       },
     },
   }
-  }
+}
 
   return { mkClient, state, counts, mailbox }
 }
 
 // ---------- scenario wiring ----------
 
-function deployments({ testTimeout = '300' } = {}) {
+function deployments() {
   return {
     'auto-evm-mainnet-paywall': { address: V1M, blockNumber: '50', deliveryTimeout: '259200', gracePeriod: '259200', treasury: A_ADDR },
     'auto-evm-mainnet-paywall-test': { address: V1T, blockNumber: '55', deliveryTimeout: '259200', gracePeriod: '259200', treasury: A_ADDR },
-    'auto-evm-mainnet-paywall-v2': { address: MAIN, txHash: '0x' + '9'.repeat(64), blockNumber: '60', treasury: A_ADDR, deliveryTimeout: (3n * 86400n).toString(), gracePeriod: (3n * 86400n).toString() },
-    'auto-evm-mainnet-paywall-v2-test': { address: TEST, txHash: '0x' + '8'.repeat(64), blockNumber: '62', treasury: A_ADDR, deliveryTimeout: testTimeout, gracePeriod: testTimeout === '300' ? '300' : testTimeout },
+    'auto-evm-mainnet-direct-sales': { address: MAIN, txHash: '0x' + '9'.repeat(64), blockNumber: '60', treasury: A_ADDR, platformBps: '1000' },
+    'auto-evm-mainnet-direct-sales-test': { address: TEST, txHash: '0x' + '8'.repeat(64), blockNumber: '62', treasury: A_ADDR, platformBps: '1000' },
     'auto-evm-mainnet-v2': { address: REG },
     'auto-evm-mainnet-mailbox': { address: MBX, blockNumber: '40' },
   }
 }
 
-async function setup({ faults = {}, testTimeout = '300' } = {}) {
+async function setup({ faults = {} } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'pd-accept-test-'))
   const clock = { t: 1_767_139_200_000 } // fixed start (2026-01-01, deterministic)
   const mockConsensus = makeMockConsensus(clock)
-  const mockEvm = makeMockEvm(faults, clock, { testTimeout: Number(testTimeout) })
+  const mockEvm = makeMockEvm(faults, clock, {})
   const runner = createRunner({
     A: mockEvm.mkClient(A_ADDR),
     C: mockEvm.mkClient(C_ADDR),
-    abis: artifactV2.abi,
+    abis: artifactSales.abi,
     mailboxAbis: mailboxArtifact.abi,
     registryAbi: REGISTRY_ABI,
-    artifactV2,
-    deployments: deployments({ testTimeout }),
+    artifactSales,
+    deployments: deployments(),
     consensus: mockConsensus.consensus,
     now: () => clock.t,
     sleep: async (ms) => { clock.t += ms }, // mock sleeps advance the on-chain clock (inline waits finish instantly)
@@ -490,19 +537,34 @@ async function expectExit(promise, code, msg) {
 const tests = []
 const test = (name, fn) => tests.push([name, fn])
 
-test('S1 full first run (c,b,a) — TDZ fix + funds reconciled + single submission', async () => {
+test('S1 full first run (d1,d2,a) — single consensus submission + funds reconciled', async () => {
   const { runner, mockEvm, mockConsensus, dir } = await setup({})
-  const { report, exitCode } = await runner.runOrResume(false, { runId: 's1', cap: '0.2', price: '0.01', paths: 'c,b,a' })
+  let r1
+  try {
+    r1 = await runner.runOrResume(false, { runId: 's1', cap: '0.2', price: '0.01', paths: 'd1,d2,a' })
+  } catch (e) {
+    const { copyFileSync } = await import('node:fs')
+    try { copyFileSync(path.join(dir, 's1', 'journal.json'), '/tmp/s1-journal.json') } catch {}
+    throw e
+  }
+  const { report, exitCode } = r1
+  if (exitCode !== 0) {
+    const { copyFileSync } = await import('node:fs')
+    try { copyFileSync(path.join(dir, 's1', 'journal.json'), '/tmp/s1-journal.json') } catch {}
+  }
   assert(exitCode === 0, `exitCode ${exitCode} · status ${report.status} · ${report.gates.filter((g) => !g.pass).map((g) => `${g.name}(${g.detail})`).join('; ')}`)
   assert(report.status === 'passed', `status ${report.status}: ${report.gates.filter((g) => !g.pass).map((g) => `${g.name}(${g.detail})`).join('; ')}`)
   assert(existsSync(path.join(dir, 's1', 'input.json')), 'input.json was not persisted')
   const input = readJson(dir, path.join('s1', 'input.json'))
-  assert(JSON.stringify(input.paths) === JSON.stringify(['c', 'b', 'a']), 'paths were not frozen')
-  assert(mockEvm.counts.purchase === 3, `purchase broadcasts ${mockEvm.counts.purchase} ≠ 3`)
-  assert(mockEvm.counts.refund === 2, `refund broadcasts ${mockEvm.counts.refund} ≠ 2`)
+  assert(JSON.stringify(input.paths) === JSON.stringify(['d1', 'd2', 'a']), 'paths were not frozen')
+  assert(mockEvm.counts.purchase === 2, `purchase broadcasts ${mockEvm.counts.purchase} ≠ 2 (d1 + a; the d2 rollback broadcasts none)`)
+  assert(mockEvm.counts.markKeySent === 2, `markKeySent broadcasts ${mockEvm.counts.markKeySent} ≠ 2`)
+  assert(mockEvm.counts.rate === 3, `rate broadcasts ${mockEvm.counts.rate} ≠ 3 (d1 positive + switch to negative · a positive)`)
+  assert(mockEvm.counts.refund === undefined && mockEvm.counts.withdraw === undefined, 'no refund/withdraw may exist (direct sales has no escrow)')
   assert(mockConsensus.submitCount() === 2, `consensus submission blocks ${mockConsensus.submitCount()} ≠ 2 (single submission)`)
   assert(report.funds.A?.diff === '0' && report.funds.C?.diff === '0', `funds ledger not reconciled: A ${report.funds.A?.diff} / C ${report.funds.C?.diff}`)
   assert(report.finishReserveUsed === false, 'the safe-finish reserve should not have been used')
+  assert(mockEvm.state.balances.get(MAIN.toLowerCase()) === 0n && mockEvm.state.balances.get(TEST.toLowerCase()) === 0n, 'both instances contract balances should stay 0')
 })
 
 test('S2 resume without input.json — rejected with zero broadcasts', async () => {
@@ -519,13 +581,13 @@ test('S3 purchase accepted but the response lost — no resend; resume verifies 
   const { runner, mockEvm, dir } = await setup({
     faults: { broadcast: (ctx) => { if (ctx.fn === 'purchase' && !triggered) { triggered = true; return 'drop-response' } return undefined } },
   })
-  await expectExit(runner.runOrResume(false, { runId: 's3', cap: '0.2', price: '0.01', paths: 'c' }), 2, 'S3 first run')
+  await expectExit(runner.runOrResume(false, { runId: 's3', cap: '0.2', price: '0.01', paths: 'd1' }), 2, 'S3 first run')
   const j1 = readJson(dir, path.join('s3', 'journal.json'))
-  const c2 = j1.steps.find((s) => s.id === 'C2-purchase')
-  assert(c2.state === 'submitted' && c2.txHash, 'C2 should be submitted+txHash (hash persisted before broadcast)')
+  const s = j1.steps.find((x) => x.id === 'D1-purchase')
+  assert(s.state === 'submitted' && s.txHash, 'D1-purchase should be submitted+txHash (hash persisted before broadcast)')
   assert(mockEvm.counts.purchase === 1, `purchase broadcasts ${mockEvm.counts.purchase} ≠ 1`)
   // the order actually exists on the (mock) chain — the tx was included
-  assert(mockEvm.state.txs.get(c2.txHash)?.receipt.status === 'success', 'the tx should have been accepted by the node')
+  assert(mockEvm.state.txs.get(s.txHash)?.receipt.status === 'success', 'the tx should have been accepted by the node')
 
   const { report, exitCode } = await runner.runOrResume(true, { runId: 's3' })
   assert(exitCode === 0 && report.status === 'passed', `resume did not pass: ${report.status} · ${report.gates.filter((g) => !g.pass).map((g) => `${g.name}(${g.detail})`).join('; ')}`)
@@ -537,9 +599,9 @@ test('S4 receipt wait timeout — no resend; resume verifies and completes', asy
   const { runner, mockEvm, dir } = await setup({
     faults: { waitTimeout: (tx) => { if (tx.ctx.fn === 'purchase' && !triggered) { triggered = true; return true } return false } },
   })
-  await expectExit(runner.runOrResume(false, { runId: 's4', cap: '0.2', price: '0.01', paths: 'c' }), 2, 'S4 first run')
-  const c2 = readJson(dir, path.join('s4', 'journal.json')).steps.find((s) => s.id === 'C2-purchase')
-  assert(c2.state === 'submitted' && c2.txHash, 'C2 should be submitted+txHash')
+  await expectExit(runner.runOrResume(false, { runId: 's4', cap: '0.2', price: '0.01', paths: 'd1' }), 2, 'S4 first run')
+  const s = readJson(dir, path.join('s4', 'journal.json')).steps.find((x) => x.id === 'D1-purchase')
+  assert(s.state === 'submitted' && s.txHash, 'D1-purchase should be submitted+txHash')
   assert(mockEvm.counts.purchase === 1, 'a receipt timeout must not trigger a resend')
   const { report, exitCode } = await runner.runOrResume(true, { runId: 's4' })
   assert(exitCode === 0 && report.status === 'passed', `resume did not pass: ${report.status} · ${report.gates.filter((g) => !g.pass).map((g) => `${g.name}(${g.detail})`).join('; ')}`)
@@ -551,7 +613,7 @@ test('S5 on-chain reverted (unknown) re-entry — read-only verification, no new
   const { runner, mockEvm, dir } = await setup({
     faults: { revertOn: (ctx) => { if (ctx.fn === 'purchase' && !triggered) { triggered = true; return true } return false } },
   })
-  await expectExit(runner.runOrResume(false, { runId: 's5', cap: '0.2', price: '0.01', paths: 'c' }), 2, 'S5 first run')
+  await expectExit(runner.runOrResume(false, { runId: 's5', cap: '0.2', price: '0.01', paths: 'd1' }), 2, 'S5 first run')
   const before = JSON.stringify(mockEvm.counts)
   await expectExit(runner.runOrResume(true, { runId: 's5' }), 2, 'S5 re-entry')
   assert(JSON.stringify(mockEvm.counts) === before, `unknown re-entry must not broadcast: ${before} → ${JSON.stringify(mockEvm.counts)}`)
@@ -561,59 +623,49 @@ test('S5 on-chain reverted (unknown) re-entry — read-only verification, no new
   assert(report.gates.find((g) => g.name === 'noOpenOrUnknownSteps')?.pass === false, 'the unknown gate should fail')
 })
 
-test('S6 C/B cross-process wait then resume — restored from the frozen plan; B not lost, A not run', async () => {
-  const { runner, clock, mockEvm, dir } = await setup({ testTimeout: '259200' }) // 3 days → forces exit 3
-  let caught = null
-  try {
-    await runner.runOrResume(false, { runId: 's6', cap: '0.2', price: '0.01', paths: 'c,b' })
-  } catch (e) { caught = e }
-  assert(caught instanceof Exit && caught.code === 3, `expected exit 3, got ${caught?.code ?? 'none'}: ${caught?.message}`)
-  const j1 = readJson(dir, path.join('s6', 'journal.json'))
-  assert(j1.pathResults.C?.finalState === 'refunded', 'C should have completed in the first run')
-  assert(j1.steps.find((s) => s.id === 'B4-wait-timeout')?.nextEligibleAt, 'B4 should persist nextEligibleAt')
-  assert(!j1.steps.some((s) => s.id.startsWith('A')), 'A is not in the frozen plan; no A steps may appear')
-
-  clock.t += 4 * 86400 * 1000 // fast-forward 4 days
-  const { report, exitCode } = await runner.runOrResume(true, { runId: 's6' })
-  assert(exitCode === 0 && report.status === 'passed', `resume did not pass: ${report.status} · ${report.gates.filter((g) => !g.pass).map((g) => g.name).join(';')}`)
-  assert(mockEvm.counts.purchase === 2, `purchase ${mockEvm.counts.purchase} ≠ 2 (C already has 1; B adds 1)`)
-  assert(mockEvm.counts.refund === 2, `refund ${mockEvm.counts.refund} ≠ 2`)
-  assert(!readJson(dir, path.join('s6', 'journal.json')).steps.some((s) => s.id.startsWith('A')), 'resume must not introduce out-of-plan A steps')
+test('S6 D2 rollback path standalone — zero purchase broadcasts, zero deals, funds reconciled', async () => {
+  const { runner, mockEvm } = await setup({})
+  const { report, exitCode } = await runner.runOrResume(false, { runId: 's6', cap: '0.2', price: '0.01', paths: 'd2' })
+  assert(exitCode === 0 && report.status === 'passed', `d2 did not pass: ${report.status} · ${report.gates.filter((g) => !g.pass).map((g) => `${g.name}(${g.detail})`).join('; ')}`)
+  assert(mockEvm.counts.purchase === undefined, `the rollback path must not broadcast purchase: ${mockEvm.counts.purchase}`)
+  assert(mockEvm.counts.createRevision === 2 && mockEvm.counts.delist === 1, `createRevision/delist broadcasts ${mockEvm.counts.createRevision}/${mockEvm.counts.delist} ≠ 2/1`)
+  assert(report.funds.A?.diff === '0' && report.funds.C?.diff === '0', `funds ledger not reconciled: A ${report.funds.A?.diff} / C ${report.funds.C?.diff}`)
+  assert(report.ordersCreated.length === 0, 'the rollback path has no deal orders')
 })
 
 test('S7 insufficient budget — input-legality check rejects, zero broadcasts', async () => {
   const { runner, mockEvm } = await setup({})
-  await expectExit(runner.runOrResume(false, { runId: 's7', cap: '0.001', price: '0.01', paths: 'c,b,a' }), 2, 'S7')
+  await expectExit(runner.runOrResume(false, { runId: 's7', cap: '0.001', price: '0.01', paths: 'd1,d2,a' }), 2, 'S7')
   assert(Object.keys(mockEvm.counts).length === 0, `broadcasts happened: ${JSON.stringify(mockEvm.counts)}`)
 })
 
 test('S8 codeMismatch — pre-write guard rejects, zero broadcasts', async () => {
   const s = await setup({})
   s.mockEvm.state.codeBad = TEST
-  await expectExit(s.runner.runOrResume(false, { runId: 's8', cap: '0.2', price: '0.01', paths: 'c' }), 2, 'S8')
+  await expectExit(s.runner.runOrResume(false, { runId: 's8', cap: '0.2', price: '0.01', paths: 'd1' }), 2, 'S8')
   assert(Object.keys(s.mockEvm.counts).length === 0, `broadcasts happened: ${JSON.stringify(s.mockEvm.counts)}`)
 })
 
 test('S9 partially executed paths — report says incomplete, never passed', async () => {
   const { runner, dir, mockEvm } = await setup({})
-  // hand-crafted: input freezes paths=['c','a'], journal has only C1 planned
+  // hand-crafted: input freezes paths=['d1','a'], journal has only D1-list planned
   const { writeFileSync, mkdirSync } = await import('node:fs')
   mkdirSync(path.join(dir, 's9'), { recursive: true })
   writeFileSync(path.join(dir, 's9', 'input.json'), JSON.stringify({
-    runId: 's9', commit: 'test-commit-0123456789', chainId: 870, instances: { main: MAIN, test: TEST },
+    runId: 's9', suite: 'direct-sales-v1', commit: 'test-commit-0123456789', chainId: 870, instances: { main: MAIN, test: TEST },
     registry: REG, mailbox: MBX, mailboxDeployBlock: 40, roles: { A: A_ADDR, C: C_ADDR },
-    price: '0.01', cap: '0.2', capWei: String(2n * 10n ** 17n), paths: ['c', 'a'],
-    baseline: { balanceA: String(5n * AI3), balanceC: String(1n * AI3), creditsMain: '0', creditsTest: '0', contractMain: '0', contractTest: '0' },
+    price: '0.01', cap: '0.2', capWei: String(2n * 10n ** 17n), paths: ['d1', 'a'],
+    baseline: { balanceA: String(5n * AI3), balanceC: String(1n * AI3), contractMain: '0', contractTest: '0' },
   }))
-  writeFileSync(path.join(dir, 's9', 'journal.json'), JSON.stringify({ runId: 's9', steps: [{ id: 'C1-list', state: 'planned' }], spend: { gas: '0', fees: '0', consensus: '0', escrow: '0' } }))
+  writeFileSync(path.join(dir, 's9', 'journal.json'), JSON.stringify({ runId: 's9', steps: [{ id: 'D1-list', state: 'planned' }], spend: { gas: '0', fees: '0', consensus: '0', escrow: '0' } }))
   const { report, exitCode } = await runner.reportOnly({ runId: 's9' })
   assert(report.status === 'incomplete', `status ${report.status} ≠ incomplete`)
   assert(exitCode === 2, `exitCode ${exitCode} ≠ 2`)
   assert(report.gates.find((g) => g.name === 'requiredPathsComplete')?.pass === false, 'the mandatory-paths gate should fail')
-  // resume after the fault clears — C re-runs and A is added; no path is skipped
+  // resume after the fault clears — D1 re-runs and A is added; no path is skipped
   const { report: r2, exitCode: e2 } = await runner.runOrResume(true, { runId: 's9' })
   assert(e2 === 0 && r2.status === 'passed', `resume did not pass: ${r2.status}`)
-  assert(mockEvm.counts.purchase === 2, `purchase ${mockEvm.counts.purchase} ≠ 2 (one each for C+A)`)
+  assert(mockEvm.counts.purchase === 2, `purchase ${mockEvm.counts.purchase} ≠ 2 (one each for D1+A)`)
 })
 
 test('S10 preflight gate: codeMatch=false must fail', async () => {
@@ -621,8 +673,8 @@ test('S10 preflight gate: codeMatch=false must fail', async () => {
   s.mockEvm.state.codeBad = MAIN
   const { report, exitCode } = await s.runner.preflight({})
   assert(exitCode === 1, `exitCode ${exitCode} ≠ 1`)
-  const g = report.gates.find((x) => x.name === 'v2Code_auto-evm-mainnet-paywall-v2')
-  assert(g && g.pass === false, 'the v2Code gate should fail')
+  const g = report.gates.find((x) => x.name === 'salesCode_auto-evm-mainnet-direct-sales')
+  assert(g && g.pass === false, 'the salesCode gate should fail')
 })
 
 // ---------- runner ----------

@@ -48,6 +48,8 @@ import {
 import { dismissPendingPublish, listPendingPublish, verifyPublishTask } from '../lib/publish'
 import { saveBlob } from '../lib/download'
 import { PaywallSection } from './PaywallSection'
+import { SalesSection } from './SalesSection'
+import { salesActive } from '../lib/sales'
 import { nodeCount, t, useI18n } from '../i18n'
 
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 // per-file cap; larger files need chunking (a later version)
@@ -718,6 +720,9 @@ export function FilesPage() {
       </section>
 
       <PaywallSection getPassphrase={openPassphrasePrompt} />
+
+      {/* direct sales: rendered once the DirectSales contract is configured; until then it takes no space (the escrow section stays for existing-order disposition) */}
+      {salesActive() && <SalesSection getPassphrase={openPassphrasePrompt} />}
 
       {passPrompt && (
         <div

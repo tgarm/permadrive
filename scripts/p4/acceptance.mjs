@@ -1,14 +1,20 @@
-// P4 · PaywallV2 on-chain acceptance runner — thin CLI wrapper (real transport injected).
-// Orchestration logic lives in lib/acceptance-core.mjs (see its header for the review-fix
-// mapping); offline fault-injection tests: acceptance-test.mjs.
+// P4 · DirectSales on-chain acceptance runner — thin CLI wrapper (real transport injected).
+// Orchestration lives in lib/acceptance-core.mjs (runner-hardening notes: the escrow-era
+// infrastructure carries over; the direct-sales path rework is documented in its file
+// header); offline fault-injection tests: acceptance-test.mjs.
 //
 //   node acceptance.mjs preflight [--skip-tests]      # read-only preflight (incl. legacy
 //                                                     # paywall inventory), zero cost
-//   node acceptance.mjs run    --run-id <id> --cap 0.1 [--paths c,b,a] [--price 0.01]
+//   node acceptance.mjs run    --run-id <id> --cap 0.1 [--paths d1,d2,a] [--price 0.01]
 //   node acceptance.mjs resume --run-id <id>          # resume from the journal (verifies
 //                                                     # frozen-input consistency)
 //   node acceptance.mjs report --run-id <id>          # recompute report.json + summary.md
 //                                                     # only (gates identical to finish)
+//
+// Paths: d1 = normal direct purchase/delivery/key-grade download/rating change
+// (test instance); d2 = failed purchase rolls back atomically (test instance, zero
+// deals and zero fund movement); a = production instance, real file + real Mailbox
+// delivery + rating.
 //
 // Exit codes: 0 all mandatory paths pass; 1 definite failure; 2 blocked / unknown /
 // incomplete; 3 waiting for on-chain time.
@@ -24,8 +30,9 @@ import { Exit, createRunner } from './lib/acceptance-core.mjs'
 // ---------- CLI ----------
 
 const ROOT = new URL('../../', import.meta.url).pathname
-const OUT_BASE = path.join(ROOT, 'scripts/p4/out/acceptance')
-const V2_ARTIFACT = path.join(ROOT, 'contracts/out/PaywallV2.json')
+// DirectSales keeps its own record directory (isolated from the escrow-era out/acceptance)
+const OUT_BASE = path.join(ROOT, 'scripts/p4/out/acceptance-direct-sales')
+const SALES_ARTIFACT = path.join(ROOT, 'contracts/out/DirectSales.json')
 const MAILBOX_ARTIFACT = path.join(ROOT, 'contracts/out/Mailbox.json')
 const CONSENSUS_RPC = process.env.CHAIN_RPC ?? 'https://rpc.mainnet.subspace.foundation/ws'
 
@@ -42,10 +49,11 @@ const flag = (name, def = null) => {
 }
 const hasFlag = (name) => argv.includes(`--${name}`)
 
-const artifactV2 = JSON.parse(readFileSync(V2_ARTIFACT, 'utf8'))
+const artifactSales = JSON.parse(readFileSync(SALES_ARTIFACT, 'utf8'))
 const mailboxArtifact = JSON.parse(readFileSync(MAILBOX_ARTIFACT, 'utf8'))
 
 const OFFLINE_TESTS = [
+  ['direct-sales-test', 'scripts/p4/direct-sales-test.mjs'],
   ['paywall-v2-test', 'scripts/p4/paywall-v2-test.mjs'],
   ['acceptance-runner-test', 'scripts/p4/acceptance-test.mjs'],
   ['file-crypto-selftest', 'scripts/p4/file-crypto-selftest.mjs'],
@@ -84,10 +92,10 @@ const C = withLegacyFeeFallback(clients(2)) // buyer (separate address; index 1 
 
 const runner = createRunner({
   A, C,
-  abis: artifactV2.abi,
+  abis: artifactSales.abi,
   mailboxAbis: mailboxArtifact.abi,
   registryAbi: REGISTRY_ABI,
-  artifactV2,
+  artifactSales,
   deployments: JSON.parse(readFileSync(DEPLOYMENTS, 'utf8')),
   consensus: {
     connect: async () => ({
@@ -121,7 +129,7 @@ try {
     const { exitCode } = await runner.reportOnly({ runId: flag('run-id') })
     process.exitCode = exitCode
   } else {
-    console.log('usage: node acceptance.mjs preflight [--skip-tests] | run --run-id <id> --cap <AI3> [--paths c,b,a] [--price 0.01] | resume --run-id <id> | report --run-id <id>')
+    console.log('usage: node acceptance.mjs preflight [--skip-tests] | run --run-id <id> --cap <AI3> [--paths d1,d2,a] [--price 0.01] | resume --run-id <id> | report --run-id <id>')
     process.exitCode = 2
   }
 } catch (e) {

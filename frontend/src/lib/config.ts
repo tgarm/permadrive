@@ -27,6 +27,11 @@ export interface AppConfig {
    *  keeps v1 as the only active instance (current behavior) */
   paywallV2Address: string
   paywallV2DeployBlock: number
+  /** DirectSales (direct sales: pay-and-split, no refunds, ratings).
+   *  Once deployed and filled in, the sales section switches from the escrow
+   *  UI to direct sales; empty (default) means direct sales is unavailable */
+  salesAddress: string
+  salesDeployBlock: number
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -46,6 +51,9 @@ export const DEFAULT_CONFIG: AppConfig = {
   // Paywall v2 (order-model redesign) — filled in by the deploy script / Settings after deployment
   paywallV2Address: '',
   paywallV2DeployBlock: 0,
+  // DirectSales (direct sales) — filled in by the deploy script / Settings after deployment
+  salesAddress: '',
+  salesDeployBlock: 0,
 }
 
 // A few dev/acceptance devices stored the v1 address as registryAddress back
@@ -74,6 +82,8 @@ export function loadConfig(): AppConfig {
       paywallDeployBlock: Number(parsed.paywallDeployBlock) > 0 ? Number(parsed.paywallDeployBlock) : DEFAULT_CONFIG.paywallDeployBlock,
       paywallV2Address: typeof parsed.paywallV2Address === 'string' ? parsed.paywallV2Address : DEFAULT_CONFIG.paywallV2Address,
       paywallV2DeployBlock: Number(parsed.paywallV2DeployBlock) > 0 ? Number(parsed.paywallV2DeployBlock) : DEFAULT_CONFIG.paywallV2DeployBlock,
+      salesAddress: typeof parsed.salesAddress === 'string' ? parsed.salesAddress : DEFAULT_CONFIG.salesAddress,
+      salesDeployBlock: Number(parsed.salesDeployBlock) > 0 ? Number(parsed.salesDeployBlock) : DEFAULT_CONFIG.salesDeployBlock,
     }
   } catch {
     return { ...DEFAULT_CONFIG }

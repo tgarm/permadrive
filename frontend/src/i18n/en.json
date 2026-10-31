@@ -328,7 +328,8 @@
     "feeRateValue": "≈ {0} AI3 / MB (live transactionByteFee value)",
     "testConnection": "Test connection",
     "paywallLabel": "Paywall v1 contract address (legacy escrow · frozen, refunds/withdrawals only)",
-    "paywallV2Label": "Paywall v2 contract address (order model · fill in after deployment; v1 stays active while empty)"
+    "paywallV2Label": "Paywall v2 contract address (order model · fill in after deployment; v1 stays active while empty)",
+    "salesLabel": "DirectSales contract address (direct sales · fill in after deployment; the sales section appears when set)"
   },
   "errors": {
     "registryNotConfigured": "FileRegistry address not configured (Settings → on-chain registry, or built in once the mainnet deployment lands)",
@@ -390,7 +391,8 @@
     "paywallLegacyFrozen": "The legacy paywall contract is frozen (security review): new listings, purchases and deliveries on it are permanently rejected. Existing orders keep refund / confirm / withdraw; new actions use the v2 contract.",
     "paywallPayeeMismatch": "Refusing to confirm: the current listing seller no longer matches the order seller ({0}) — confirming would release funds to the wrong address. Use Refund instead.",
     "paywallV2Required": "Paid downloads are not available yet: the PaywallV2 contract is not configured (see Settings).",
-    "paywallPayeeUnknown": "Refusing to confirm: the order's seller is unknown or the listing was removed — confirming now could lock the escrowed funds into an unrecoverable address or pay an overwritten payee. Use Refund instead."
+    "paywallPayeeUnknown": "Refusing to confirm: the order's seller is unknown or the listing was removed — confirming now could lock the escrowed funds into an unrecoverable address or pay an overwritten payee. Use Refund instead.",
+    "salesNotConfigured": "Direct sales are not available yet: the DirectSales contract is not configured (see Settings)."
   },
   "messages": {
     "title": "On-chain Private Messages",
@@ -490,5 +492,46 @@
     "emptyTask": "No transaction hashes recorded — nothing was submitted from this task (it was interrupted before the first signature). Dismiss it.",
     "incomplete": "Publish incomplete: {0} node(s) were never submitted (signing stopped partway). The missing nodes are not covered by this task — dismiss it and re-upload if needed.",
     "coverageGap": "Verified transactions do not carry all expected nodes ({0} of {1} missing on-chain) — refusing to build an incomplete manifest."
+  },
+  "sales": {
+    "title": "Direct sales",
+    "notice": "Direct-sales mode: payment goes straight to the seller in the same transaction (10% platform fee) — there is no escrow and NO platform refund. Delivery is manual: the seller delivers the file key when online. Buying grants the file itself (no DRM). Only encrypted files make sense to sell. Rate honestly: up/down votes are on-chain (gas applies), one vote per buyer per product, changeable.",
+    "connectFirst": "Connect a wallet to use direct sales.",
+    "myListings": "My listings (seller)",
+    "selectEntry": "File",
+    "priceLabel": "Price (AI3)",
+    "listBtn": "List for sale",
+    "netPreview": "Platform fee {0}% · you receive ≈ {1} AI3",
+    "selectHint": "Listing or re-pricing creates a new immutable revision; sold orders are never affected.",
+    "listedOk": "Listed at {0} AI3 (new revision).",
+    "unlistedOk": "Removed \"{0}\" from sale (existing orders unaffected).",
+    "unlistBtn": "Unlist",
+    "pendingOrders": "Orders to deliver (seller)",
+    "pendingEmpty": "No orders waiting for delivery.",
+    "deliver": "Deliver key",
+    "delivering": "Delivering key to {0}…",
+    "deliveredOk": "Key delivered to {0} · marked tx {1}",
+    "viewDirectory": "Browse a directory (buyer)",
+    "addressLabel": "Seller address",
+    "view": "View",
+    "viewEmpty": "No registry entries for this address.",
+    "buy": "Buy",
+    "buyConfirm": "Buy for {0} AI3?\n\nThis pays the seller DIRECTLY in one transaction (plus gas). There is NO platform refund — delivery depends on the seller being online. Continue?",
+    "purchasedOk": "Purchased \"{0}\" for {1} AI3 — waiting for the seller to deliver the key.",
+    "notListed": "Not listed (or listing changed) — refresh the directory.",
+    "myOrders": "My orders (buyer)",
+    "ordersEmpty": "No orders yet.",
+    "state.paid": "paid · waiting for key",
+    "state.keySent": "key delivered",
+    "downloadPurchased": "Decrypt and download",
+    "decryptingPurchased": "Decrypting purchased file…",
+    "decryptedOk": "Decrypted \"{0}\" · sha256 {1}…",
+    "waitingDelivery": "Key not delivered yet — the seller delivers when online. Check again later.",
+    "rateUp": "Helpful",
+    "rateDown": "Not as described",
+    "rateConfirm": "Record this vote on-chain? The transaction costs gas. One vote per buyer per product; voting again replaces it.",
+    "ratedOk": "Vote recorded ({0}).",
+    "ratingLine": "👍 {0} · 👎 {1} · {2} buyers",
+    "noRatings": "No ratings yet"
   }
 }

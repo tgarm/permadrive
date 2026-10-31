@@ -328,7 +328,8 @@
     "feeRateValue": "≈ {0} AI3 / MB（transactionByteFee 实时值）",
     "testConnection": "测试连接",
     "paywallLabel": "Paywall v1 合约地址（旧托管 · 已冻结，仅存量订单退款/提现）",
-    "paywallV2Label": "Paywall v2 合约地址（订单模型 · 部署后填入；为空时新购买走 v1）"
+    "paywallV2Label": "Paywall v2 合约地址（订单模型 · 部署后填入；为空时新购买走 v1）",
+    "salesLabel": "DirectSales 合约地址（直接销售 · 部署后填入；填入后文件页显示销售区）"
   },
   "errors": {
     "registryNotConfigured": "FileRegistry 地址未配置（Settings → 链上目录，或等主网部署后内置）",
@@ -390,7 +391,8 @@
     "paywallLegacyFrozen": "旧付费合约已冻结（安全复核）：其上新上架、购买与交付一律永久拒绝。存量订单保留退款 / 确认 / 提现；新操作请使用 v2 合约。",
     "paywallPayeeMismatch": "拒绝确认：当前 listing 卖家已不是订单卖家（{0}），确认会把资金放款给错误地址。请改用退款。",
     "paywallV2Required": "付费下载尚未启用：PaywallV2 合约未配置（见设置页）。",
-    "paywallPayeeUnknown": "拒绝确认：订单卖家未知或 listing 已下架——此时确认可能把托管资金锁进无人可提的地址，或放款给被覆盖的收款人。请改用退款。"
+    "paywallPayeeUnknown": "拒绝确认：订单卖家未知或 listing 已下架——此时确认可能把托管资金锁进无人可提的地址，或放款给被覆盖的收款人。请改用退款。",
+    "salesNotConfigured": "直接销售尚未启用：DirectSales 合约未配置（见设置页）。"
   },
   "messages": {
     "title": "链上私密消息",
@@ -490,5 +492,46 @@
     "emptyTask": "任务没有记录任何交易 hash —— 首笔签名前即中断，本任务从未提交（可放心放弃）。",
     "incomplete": "发布不完整：{0} 个节点从未提交（逐笔降级中途停止）。缺失节点不在本任务覆盖范围内 —— 可放弃任务，必要时重新上传。",
     "coverageGap": "已核实交易不承载全部预期节点（链上缺 {0}/{1} 个）—— 拒绝生成不完整 manifest。"
+  },
+  "sales": {
+    "title": "直接销售",
+    "notice": "直接销售模式：货款在同一笔交易直接付给卖家（含 10% 平台费）——无托管、平台不提供退款。交付为人工：卖家在线时交付文件密钥。购买即获得文件本身（无 DRM）。仅加密文件有意义。请如实评价：好/差评上链（需要 gas），每个商品每地址一票，可修改。",
+    "connectFirst": "连接钱包后即可使用直接销售。",
+    "myListings": "我的在售（卖家）",
+    "selectEntry": "文件",
+    "priceLabel": "价格（AI3）",
+    "listBtn": "上架",
+    "netPreview": "平台费 {0}% · 你实收 ≈ {1} AI3",
+    "selectHint": "上架或改价都会生成新的不可变版本（revision）；已成交订单不受影响。",
+    "listedOk": "已上架，价格 {0} AI3（新版本）。",
+    "unlistedOk": "已下架「{0}」（已成交订单不受影响）。",
+    "unlistBtn": "下架",
+    "pendingOrders": "待交付订单（卖家）",
+    "pendingEmpty": "没有等待交付的订单。",
+    "deliver": "交付密钥",
+    "delivering": "正在向 {0} 交付密钥…",
+    "deliveredOk": "密钥已交付 {0} · 登记 tx {1}",
+    "viewDirectory": "浏览目录（买家）",
+    "addressLabel": "卖家地址",
+    "view": "查看",
+    "viewEmpty": "该地址没有目录条目。",
+    "buy": "购买",
+    "buyConfirm": "以 {0} AI3 购买？\n\n货款将随本笔交易直接付给卖家（另付 gas）。平台不提供退款——能否拿到密钥取决于卖家在线交付。是否继续？",
+    "purchasedOk": "已购买「{0}」（{1} AI3）——等待卖家交付密钥。",
+    "notListed": "未上架（或上架信息已变化）——请刷新目录。",
+    "myOrders": "我的订单（买家）",
+    "ordersEmpty": "还没有订单。",
+    "state.paid": "已付款 · 等待密钥",
+    "state.keySent": "密钥已交付",
+    "downloadPurchased": "解密下载",
+    "decryptingPurchased": "正在解密已购文件…",
+    "decryptedOk": "已解密「{0}」· sha256 {1}…",
+    "waitingDelivery": "密钥尚未交付——卖家在线时会交付，稍后再试。",
+    "rateUp": "好评",
+    "rateDown": "差评",
+    "rateConfirm": "将评价记录上链？该交易需要支付 gas。每个商品每地址一票，再次评价会覆盖原票。",
+    "ratedOk": "评价已记录（{0}）。",
+    "ratingLine": "👍 {0} · 👎 {1} · {2} 人购买",
+    "noRatings": "暂无评价"
   }
 }
