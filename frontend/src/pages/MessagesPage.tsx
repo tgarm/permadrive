@@ -1,7 +1,7 @@
 // On-chain private messages: conversation list (grouped by counterparty) +
 // detail + compose-by-address + reply + unread badges. Content is end-to-end
 // encrypted; who talks to whom, when, and ciphertext length are public (noted
-// at the top). On mount: ensureAnnounced (idempotent) + syncMessages (getLogs
+// at the top). On mount: read-only syncMessages (getLogs
 // cursor), plus a quiet 30s poll while open. Received plaintext is cached in
 // IndexedDB; the outbox plaintext is local-only (not restored on a new device).
 
@@ -28,14 +28,22 @@ export function MessagesPage() {
 
   const refresh = useCallback(async () => setMessages(await listMessages()), [])
 
-  const sync = useCallback(async () => {
-    if (!evm) return
+  const enableReceiving = async () => {
+    if (!evm || busy || !window.confirm(t('messages.enableExplain'))) return
+    setBusy(true)
+    setStatus(t('messages.enableExplain'))
     try {
       const r = await ensureAnnounced(evm)
-      setStatus(r.txHash ? t('messages.announceTx', [r.txHash.slice(0, 14) + '…']) : t('messages.announceOk'))
+      setStatus(r.txHash ? t('messages.announceTx', [r.txHash]) : t('messages.announceOk'))
     } catch (e) {
       setStatus(t('messages.announceFailed', [(e as Error).message]))
+    } finally {
+      setBusy(false)
     }
+  }
+
+  const sync = useCallback(async () => {
+    if (!evm) return
     try {
       const r = await syncMessages(evm.address, evm)
       if (r.scanned > 0) setStatus(t('messages.syncDone', [r.inbox, r.outbox]))
@@ -136,8 +144,9 @@ export function MessagesPage() {
   const send = async (recipient: string, text: string) => {
     if (!evm || !recipient || !text.trim()) return
     setBusy(true)
-    setStatus(null)
+    setStatus(t('messages.sendExplain'))
     try {
+      if (!window.confirm(t('messages.sendExplain'))) return
       const r = await sendEncryptedMessage(evm, recipient, text)
       setStatus(t('messages.sentTx', [r.txHash.slice(0, 14) + '…']))
       setDraft('')
@@ -172,6 +181,10 @@ export function MessagesPage() {
           </button>
         </div>
         <p className="privacy-note">{t('messages.encryptNotice')}</p>
+        <p className="muted">{t('messages.enableExplain')}</p>
+        <button className="btn small" onClick={() => void enableReceiving()} disabled={!evm || busy}>
+          {t('messages.enableReceiving')}
+        </button>
         {status && <div className="notice">{status}</div>}
         {!evm && <div className="notice">{t('messages.connectFirst')}</div>}
       </section>

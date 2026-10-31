@@ -23,9 +23,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { useChain } from '../chain-context'
 import { useSigner } from '../signer-context'
 import { formatAi3, formatBytes } from '../lib/bytes'
+import { getAnnouncedKey } from '../lib/mailbox'
 import {
   assertLegacyPayee,
-  confirmReceipt,
   confirmReceiptByKey,
   confirmReceiptV2,
   deliverKey,
@@ -228,6 +228,13 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
     if (!v2) { say(t('errors.paywallV2Required')); return } // v2 unconfigured: paid downloads are entirely unavailable
     setBusy(true)
     try {
+      // Read-only pre-flight (zero popups): without our own announced key the
+      // seller cannot deliver the file key and the order could only be
+      // refunded after the delivery timeout.
+      if (!(await getAnnouncedKey(evm.address))) {
+        say(t('paywall.enableReceivingFirst'))
+        return
+      }
       const price = formatAi3(row.price)
       await purchaseV2(evm, row.entry.manifestCid, row.seller, row.price)
       say(t('paywall.purchasedOk', [row.entry.name, price]))
@@ -301,17 +308,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
       if (plainSha !== manifest.file.sha256) throw new Error(t('files.sha256Mismatch', [plainSha]))
       saveBlob(plain, manifest.file.name, manifest.file.mimeType)
       say(t('paywall.purchasedDecrypted', [manifest.file.name, plainSha.slice(0, 16)]))
-      // decrypt success implies receipt confirmation (pays the seller); on
-      // failure refund stays available within the grace period.
-      // F01: legacy confirmation settles to the CURRENT listing — third review
-      // tightened: unknown seller / removed listing refuse confirmation
-      // (the net would be locked into 0x0 credits); a known seller still
-      // carries TOCTOU residual risk (stated on the confirm button)
-      if (pv.contract === 'v2') await confirmReceiptV2(evm, pv.orderId!)
-      else {
-        await assertLegacyPayee(pv.entry.manifestCid, pv.seller)
-        await confirmReceipt(evm, pv.entry.manifestCid)
-      }
+      // Receipt confirmation is a separate explicit user action.
       await reload()
     } catch (e) {
       say(`✗ ${(e as Error).message}`)
@@ -321,7 +318,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
   }
 
   const confirm = async (pv: OrderRow) => {
-    if (!evm) return
+    if (!evm || !window.confirm(t('paywall.confirmExplain'))) return
     setBusy(true)
     try {
       if (pv.contract === 'v2') await confirmReceiptV2(evm, pv.orderId!)

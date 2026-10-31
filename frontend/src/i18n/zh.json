@@ -396,7 +396,7 @@
     "title": "链上私密消息",
     "refresh": "同步",
     "encryptNotice": "消息经端到端加密（x25519-xsalsa20-poly1305）。谁与谁通信、时间、密文长度公开——只有内容保密。",
-    "connectFirst": "连接钱包后即可使用消息。连接时会自动注册加密公钥（幂等）。",
+    "connectFirst": "连接钱包后即可使用消息。接收需先在消息页执行一次「启用收信」（把加密公钥登记上链，仅首次需要交易）。",
     "announceOk": "加密公钥已就绪（此前已注册）。",
     "announceTx": "加密公钥已注册 · tx {0}",
     "announceFailed": "注册失败：{0}",
@@ -413,7 +413,7 @@
     "sending": "签名发送中…",
     "sentTx": "已发送 · tx {0}",
     "sendFailed": "发送失败：{0}",
-    "noKey": "对方尚未注册加密公钥——对方需连接一次钱包自动注册。",
+    "noKey": "对方尚未注册加密公钥——对方需在其消息页执行一次「启用收信」。",
     "locked": "🔒 已加密（连接同一钱包即可解密）",
     "noPlainSelf": "🔒 其他设备发送（发件明文仅存本机）",
     "decryptAll": "Decrypt all ({0} locked)",
@@ -421,12 +421,16 @@
     "unlocking": "Decrypting…",
     "decryptFailedLabel": "🔒 decryption failed",
     "decryptFailed": "Decryption failed: {0}",
-    "decryptedCount": "Decrypted {0} message(s)."
+    "decryptedCount": "Decrypted {0} message(s).",
+    "enableReceiving": "启用收信",
+    "enableExplain": "用于接收私密消息和付费文件密钥：钱包先请求加密公钥（不收 gas）；如需登记，再通过一笔 Auto-EVM 交易公开该公钥并支付 gas。私钥不会公开。",
+    "sendExplain": "将发送一条加密消息到 Auto-EVM，需要支付 gas。收发地址和时间公开。是否继续？"
   },
   "paywall": {
     "title": "付费下载",
     "notice": "数字商品模式：购买即获得文件本身（无 DRM）。货款先进托管，确认收货后放款；未交付超时或交付后宽限期内可全额退款。文件密钥经端到端加密消息交付；交付为半自动（卖家应用在线时响应）。仅加密文件有意义。",
     "connectFirst": "连接钱包后即可使用付费下载。",
+    "enableReceivingFirst": "请先启用收信（消息页 →「启用收信」）——否则卖家无法交付文件密钥，订单只能等超时退款。",
     "withdraw": "提款 {0} AI3",
     "withdrawnOk": "提款完成。",
     "myListings": "我的在售（卖家）",
@@ -453,7 +457,7 @@
     "purchasesEmpty": "还没有购买记录。",
     "downloadPurchased": "解密下载",
     "decryptingPurchased": "正在解密已购文件…",
-    "purchasedDecrypted": "已解密「{0}」· sha256 {1}…（已确认收货）",
+    "purchasedDecrypted": "已解密「{0}」· sha256 {1}…",
     "waitingDelivery": "密钥尚未交付——卖家应用在线时会自动交付，稍后再试。",
     "confirmReceipt": "确认收货",
     "confirmedOk": "已确认收货——货款已放款卖家。",
@@ -471,7 +475,8 @@
     "legacyFrozenNotice": "付费 v1 合约已冻结（安全复核）：新上架、购买与交付均已停用；存量订单保留退款 / 确认 / 提现。",
     "legacyListFrozen": "v1 合约冻结期间不可上架 —— PaywallV2 部署后恢复。",
     "legacyFrozenShort": "v1 冻结",
-    "legacyConfirmRisk": "旧订单在冻结的 v1 合约上按「当前」listing 卖家结算。确认前的核对无法完全排除「核对后、上链前」被覆盖（TOCTOU）——高价值订单建议直接退款。"
+    "legacyConfirmRisk": "旧订单在冻结的 v1 合约上按「当前」listing 卖家结算。确认前的核对无法完全排除「核对后、上链前」被覆盖（TOCTOU）——高价值订单建议直接退款。",
+    "confirmExplain": "确认收货并向卖家放款？该交易需要支付 gas，确认后此订单不能退款。"
   },
   "publishPending": {
     "title": "有 {0} 个发布结果待核实",
