@@ -31,6 +31,15 @@ export async function connectApi(url = CHAIN_RPC) {
   return api
 }
 
+// sr25519 KeyringPair loading (the @polkadot/* deps live in this directory's node_modules —
+// external scripts go through this helper instead of resolving @polkadot/api themselves)
+export async function srPairFromMnemonic(mnemonic) {
+  const { cryptoWaitReady } = await import('@polkadot/util-crypto')
+  await cryptoWaitReady()
+  const keyring = new Keyring({ type: 'sr25519' })
+  return keyring.addFromMnemonic(mnemonic)
+}
+
 // Collect system.remark nodes from a set of calls (top-level extrinsics or utility.batch inner calls).
 // AutoDrive submits per-tx (the top level is the remark); we pack via utility.batch (remark nested
 // one level deep) — both shapes must be recognized.

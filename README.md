@@ -34,7 +34,7 @@ scripts/
   poc/                  End-to-end protocol scripts: pack & publish / scan & retrieve / account generation (shared lib)
   p2/                   FileRegistry v1 compile / deploy / interaction; XDM cross-domain funding helper
   p3/                   FileRegistryV2 compile / deploy / semantic selftest / v1→v2 migration; vault crypto format selftest
-  p4/                   favicon PNG generator + reproducibility check; file-encryption selftest; Mailbox deploy + selftest; Paywall deploy + full-state-machine selftest
+  p4/                   favicon PNG generator + reproducibility check; file-encryption selftest; Mailbox deploy + selftest; Paywall deploy + full-state-machine selftest; PaywallV2 on-chain acceptance runner (read-only preflight + three order paths, journal/resume, spend cap)
 ```
 
 ## Quick start (frontend)

@@ -108,4 +108,7 @@ export function tryDecodeRemark(bytes) {
   }
 }
 
-export { CID, cidOfNode, cidToString, decodeNode, encodeNode, IPLDNodeData, MetadataType }
+export { CID, cidOfNode, cidToString, decodeNode, encodeNode, IPLDNodeData, MetadataType } from '@autonomys/auto-dag-data'
+// External scripts take auto-dag-data symbols from this module (dependency resolution is only
+// guaranteed inside this directory's node_modules)
+export { stringToCid } from '@autonomys/auto-dag-data'

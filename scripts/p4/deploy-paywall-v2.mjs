@@ -6,9 +6,13 @@
 // byte-for-byte after deployment (treasury/deliveryTimeout/gracePeriod immutables,
 // each patched by AST mapping). ADOPT_TX_HASH_MAIN / ADOPT_TX_HASH_TEST adopt an
 // existing deployment.
-// Usage: node deploy-paywall-v2.mjs — deployment and on-chain disposition are a
-// separate step: inventory the legacy instance (orders/credits) read-only first;
-// the legacy contract has no admin migration capability.
+// Usage: node deploy-paywall-v2.mjs [--force] — deployment and on-chain disposition
+// are a separate step: inventory the legacy instance (orders/credits) read-only
+// first; the legacy contract has no admin migration capability.
+// Hardening per doc/13 §8.3: skip when deployments.json already has the record
+// (--force to redeploy explicitly) and write the record immediately after each
+// instance — a first-instance-success/second-instance-failure rerun must not
+// deploy the first one again.
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { autoEvm, clients, DEPLOYMENTS, ai3, patchImmutablesMulti } from '../p3/lib/chain.mjs'
@@ -18,6 +22,7 @@ const INSTANCES = [
   { key: 'auto-evm-mainnet-paywall-v2', timeout: 3n * DAY, grace: 3n * DAY, adoptEnv: 'ADOPT_TX_HASH_MAIN' },
   { key: 'auto-evm-mainnet-paywall-v2-test', timeout: 5n * 60n, grace: 5n * 60n, adoptEnv: 'ADOPT_TX_HASH_TEST' },
 ]
+const FORCE = process.argv.includes('--force')
 
 const { address, publicClient, walletClient } = clients()
 const artifact = JSON.parse(readFileSync(new URL('../../contracts/out/PaywallV2.json', import.meta.url).pathname, 'utf8'))
@@ -27,7 +32,13 @@ if (balance === 0n) throw new Error('balance is 0')
 
 const deployments = existsSync(DEPLOYMENTS) ? JSON.parse(readFileSync(DEPLOYMENTS, 'utf8')) : {}
 
+const save = () => writeFileSync(DEPLOYMENTS, JSON.stringify(deployments, null, 2) + '\n')
+
 for (const inst of INSTANCES) {
+  if (deployments[inst.key] && !FORCE) {
+    console.log(`[${inst.key}] deployment record already exists — skipping (--force to redeploy explicitly):`, deployments[inst.key].address)
+    continue
+  }
   let txHash
   if (process.env[inst.adoptEnv]) {
     txHash = process.env[inst.adoptEnv]
@@ -70,7 +81,6 @@ for (const inst of INSTANCES) {
     gracePeriod: inst.grace.toString(),
     deployedAt: new Date().toISOString(),
   }
+  save() // doc/13 §8.3: persist per instance immediately — a mid-run failure must not lose finished records
 }
-
-writeFileSync(DEPLOYMENTS, JSON.stringify(deployments, null, 2) + '\n')
 console.log('→ contracts/deployments.json (paywall-v2 + paywall-v2-test)')
