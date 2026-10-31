@@ -16,7 +16,7 @@
 // Balance assertions follow the treasury==signer rule (net/increment accounting).
 // For fast offline regression incl. time-traveled timeout paths use
 // paywall-v2-test.mjs (anvil, zero funds).
-// doc/14 §5 fixes: (1) uint8/uint16 unified to the number decoding rule (pit 26);
+// Runbook review fixes: (1) uint8/uint16 unified to the number decoding rule (pit 26);
 // (2) orderId parsed from the purchase receipt's Purchased event (never orderCount);
 // (3) withdraw asserted against the total credits baseline taken right before it
 // (credits added by the orderId3 confirmation are no longer masked).
@@ -72,13 +72,13 @@ async function expectRevert(factory, reason) {
 
 const read = (c, contract, fn, args = []) => c.publicClient.readContract({ address: contract, abi: abis, functionName: fn, args })
 // public struct getter (orders) returns an unnamed tuple — destructure positionally.
-// doc/14 §5-1: uint8/uint16 decode as number in viem (pit 26) — normalize to the
+// Review fix 1: uint8/uint16 decode as number in viem (pit 26) — normalize to the
 // number rule instead of failing correct on-chain results via bigint comparisons.
 async function orderOf(c, contract, id) {
   const [seller, buyer, price, feeBps, state] = await read(c, contract, 'orders', [id])
   return { seller, buyer, price, feeBps: Number(feeBps), state: Number(state) }
 }
-// doc/14 §5-2: orderId always parsed from the purchase receipt's Purchased event
+// Review fix 2: orderId always parsed from the purchase receipt's Purchased event
 // (indexed orderId), never inferred from orderCount — concurrent purchases change it.
 function orderIdFromReceipt(rx) {
   for (const log of rx.logs) {
@@ -170,7 +170,7 @@ const FEE_BPS = 1000 // default feeBps (uint16 → number); use BigInt(FEE_BPS) 
   await write(A, C, 'setPrice', [key2, 0n]) // delist cleanup (escrowed order unaffected)
   await write(Bu, C, 'confirmReceipt', [orderId3])
 
-  // doc/14 §5-3: the orderId3 confirmation already credited A — assert the
+  // Review fix 3: the orderId3 confirmation already credited A — assert the
   // withdrawal against the total credits taken right before it (never reuse one
   // order's increment, and never mask mixed credits with a balance-diff shortcut)
   const creditsBeforeWithdraw = await read(A, C, 'credits', [A.address])

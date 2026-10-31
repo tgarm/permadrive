@@ -80,25 +80,25 @@ export async function walkBlocksBack(api, startHash, count, onBlock) {
   }
 }
 
-// Submit a signed tx, scan the best chain to find its inclusion block, then wait for
+// Wait side for an ALREADY-SUBMITTED tx (the caller is responsible for exactly one
+// author.submitExtrinsic): scan the best chain for the inclusion block, then wait for
 // confirmationDepth subsequent blocks and verify the inclusion block is still canonical.
 // Finality on this chain can lag by days, so waiting for finalized is not viable;
 // this matches the AutoDrive backend's anti-reorg policy (onchainPublisher/confirmation.ts).
+// Single-submission discipline: submission and waiting must be split — resubmitting the
+// same tx with the same nonce hits the (signer, nonce) dedup ban; a scan timeout does NOT
+// mean the submission failed — it can only be marked unknown and verified by a human.
 // Returns { txHash, blockHash, height }
-export async function submitAndWaitConfirmed(
+export async function awaitConfirmed(
   api,
-  tx,
-  { pollMs = 6000, timeoutMs = 8 * 60_000, depth = 12 } = {},
+  txHash,
+  { startHeight, pollMs = 6000, timeoutMs = 8 * 60_000, depth = 12 } = {},
 ) {
-  const txHash = tx.hash.toHex()
-  console.log(`  submitting ${txHash} (${(tx.encodedLength / 1024).toFixed(1)} KiB)…`)
-  await api.rpc.author.submitExtrinsic(tx.toHex())
-
   // 1) Find the inclusion block on the best chain (remember already-scanned heights to avoid
   //    rescanning; fork boundaries in production may briefly return a zero hash → skip that
   //    height instead of crashing)
-  const startHeight = (await api.rpc.chain.getHeader()).number.toNumber()
-  let nextToCheck = startHeight
+  const from = startHeight ?? (await api.rpc.chain.getHeader()).number.toNumber()
+  let nextToCheck = from
   let inclusion = null
   const deadline = Date.now() + timeoutMs
   while (!inclusion && Date.now() < deadline) {
@@ -133,4 +133,18 @@ export async function submitAndWaitConfirmed(
     await sleep(pollMs)
   }
   throw new Error('timeout waiting for confirmation depth')
+}
+
+// Submit the signed tx exactly once, then hand over to awaitConfirmed for confirmation.
+// Returns { txHash, blockHash, height }
+export async function submitAndWaitConfirmed(
+  api,
+  tx,
+  { pollMs = 6000, timeoutMs = 8 * 60_000, depth = 12 } = {},
+) {
+  const txHash = tx.hash.toHex()
+  console.log(`  submitting ${txHash} (${(tx.encodedLength / 1024).toFixed(1)} KiB)…`)
+  await api.rpc.author.submitExtrinsic(tx.toHex())
+  const startHeight = (await api.rpc.chain.getHeader()).number.toNumber()
+  return awaitConfirmed(api, txHash, { startHeight, pollMs, timeoutMs, depth })
 }
