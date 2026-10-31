@@ -387,8 +387,10 @@
     "paywallNotConfigured": "Paywall 合约地址未配置",
     "paywallNotEncrypted": "该 manifest 未加密——没有密钥可交付",
     "publishPendingVerify": "发布结果待核实：交易已提交但确认未完成（{0}）。已保存恢复凭据，可稍后在文件页「核实」——请勿重复上传同一文件。",
-    "paywallLegacyFrozen": "旧付费合约已冻结（安全复核）：PaywallV2 部署前拒绝新上架、购买与交付。",
-    "paywallPayeeMismatch": "拒绝确认：当前 listing 卖家已不是订单卖家（{0}），确认会把资金放款给错误地址。"
+    "paywallLegacyFrozen": "旧付费合约已冻结（安全复核）：其上新上架、购买与交付一律永久拒绝。存量订单保留退款 / 确认 / 提现；新操作请使用 v2 合约。",
+    "paywallPayeeMismatch": "拒绝确认：当前 listing 卖家已不是订单卖家（{0}），确认会把资金放款给错误地址。请改用退款。",
+    "paywallV2Required": "付费下载尚未启用：PaywallV2 合约未配置（见设置页）。",
+    "paywallPayeeUnknown": "拒绝确认：订单卖家未知或 listing 已下架——此时确认可能把托管资金锁进无人可提的地址，或放款给被覆盖的收款人。请改用退款。"
   },
   "messages": {
     "title": "链上私密消息",
@@ -468,7 +470,8 @@
     "refundedOk": "退款已到账（全额）。",
     "legacyFrozenNotice": "付费 v1 合约已冻结（安全复核）：新上架、购买与交付均已停用；存量订单保留退款 / 确认 / 提现。",
     "legacyListFrozen": "v1 合约冻结期间不可上架 —— PaywallV2 部署后恢复。",
-    "legacyFrozenShort": "v1 冻结"
+    "legacyFrozenShort": "v1 冻结",
+    "legacyConfirmRisk": "旧订单在冻结的 v1 合约上按「当前」listing 卖家结算。确认前的核对无法完全排除「核对后、上链前」被覆盖（TOCTOU）——高价值订单建议直接退款。"
   },
   "publishPending": {
     "title": "有 {0} 个发布结果待核实",

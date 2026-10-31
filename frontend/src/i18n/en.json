@@ -387,8 +387,10 @@
     "paywallNotConfigured": "Paywall contract address is not configured",
     "paywallNotEncrypted": "This manifest is not encrypted — nothing to deliver",
     "publishPendingVerify": "Publish result pending verification: the transaction was submitted but confirmation did not finish ({0}). Recovery data is saved — use “Verify” on the files page later. Do not re-upload the same file.",
-    "paywallLegacyFrozen": "The legacy paywall contract is frozen (security review): new listings, purchases and deliveries are rejected until PaywallV2 is deployed.",
-    "paywallPayeeMismatch": "Refusing to confirm: the current listing seller no longer matches the order seller ({0}) — confirming would release funds to the wrong address."
+    "paywallLegacyFrozen": "The legacy paywall contract is frozen (security review): new listings, purchases and deliveries on it are permanently rejected. Existing orders keep refund / confirm / withdraw; new actions use the v2 contract.",
+    "paywallPayeeMismatch": "Refusing to confirm: the current listing seller no longer matches the order seller ({0}) — confirming would release funds to the wrong address. Use Refund instead.",
+    "paywallV2Required": "Paid downloads are not available yet: the PaywallV2 contract is not configured (see Settings).",
+    "paywallPayeeUnknown": "Refusing to confirm: the order's seller is unknown or the listing was removed — confirming now could lock the escrowed funds into an unrecoverable address or pay an overwritten payee. Use Refund instead."
   },
   "messages": {
     "title": "On-chain Private Messages",
@@ -468,7 +470,8 @@
     "refundedOk": "Refunded in full.",
     "legacyFrozenNotice": "The paywall v1 contract is frozen (security review): new listings, purchases and deliveries are disabled. Existing orders keep refund / confirm / withdraw.",
     "legacyListFrozen": "Listing is disabled while the v1 contract is frozen — available after PaywallV2 deployment.",
-    "legacyFrozenShort": "v1 frozen"
+    "legacyFrozenShort": "v1 frozen",
+    "legacyConfirmRisk": "Legacy orders settle to the CURRENT listing seller on the frozen v1 contract. The pre-confirm check cannot fully rule out an overwrite between the check and the transaction (TOCTOU) — for high-value orders, refund is the safer option."
   },
   "publishPending": {
     "title": "{0} publish result(s) pending verification",

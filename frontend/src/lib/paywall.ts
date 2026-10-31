@@ -14,10 +14,11 @@
 // shadow the correct delivery. v1 (no binding fields) still parses, for legacy
 // orders only.
 //
-// Dual-instance strategy (R01 deployment handling + second review F01):
-// the v1 Paywall carries a seller-overwrite flaw and is frozen read-only —
-// new purchases/listings/deliveries are rejected at the WRITE LAYER (even
-// while v2 is undeployed, so the flawed contract cannot absorb new orders);
+// Dual-instance strategy (R01 deployment handling + second review F01, fixed
+// by the third review): the v1 Paywall carries a seller-overwrite flaw and is
+// frozen read-only — new purchases/listings/deliveries are rejected at the
+// WRITE LAYER unconditionally (assertLegacyWriteFrozen always throws, whether
+// or not v2 is deployed, so the flawed contract cannot absorb new orders);
 // v1 keeps refund/confirm/withdraw entries for existing-order disposition
 // only (confirm additionally verifies the current payee, see
 // assertLegacyPayee). While v2 is unconfigured, paid downloads are entirely
@@ -28,18 +29,18 @@
 // and purchase names the seller plus a maxPrice bound.
 
 import { keccak256, parseAbiItem, toHex } from 'viem'
-import { loadConfig } from './config'
-import { PAYWALL_ABI } from './paywall-abi'
-import { PAYWALL_V2_ABI } from './paywall-abi-v2'
+import { loadConfig } from './config.ts'
+import { PAYWALL_ABI } from './paywall-abi.ts'
+import { PAYWALL_V2_ABI } from './paywall-abi-v2.ts'
 import { getMeta, putMeta } from './store.ts'
-import { accountOf, fetchEntries, registryPublicClient, walletClientFor, type RegistryEntry } from './registry'
-import { autoEvmChain } from './evm'
+import { accountOf, fetchEntries, registryPublicClient, walletClientFor, type RegistryEntry } from './registry.ts'
+import { autoEvmChain } from './evm.ts'
 import { fromHex } from './bytes.ts'
 import { boxDecryptWithSecretKey, boxEncrypt, injectedDecrypt, parseEnvelope as parseBoxEnvelope, publicKeyFromBase64 } from './boxCrypto.ts'
-import { getAnnouncedKey, localBoxSecretKey, sendEncryptedMessage } from './mailbox'
+import { getAnnouncedKey, localBoxSecretKey, sendEncryptedMessage } from './mailbox.ts'
 import { tryUnwrapWithSignature, unwrapWithPassphrase } from './vaultCrypto.ts'
-import type { Manifest } from './manifest'
-import type { EvmSigner } from './wallet/types'
+import type { Manifest } from './manifest.ts'
+import type { EvmSigner } from './wallet/types.ts'
 import { t } from '../i18n/core.ts'
 
 const addrOk = (a: string) => /^0x[0-9a-fA-F]{40}$/.test(a) && !/^0x0{40}$/.test(a)
@@ -109,28 +110,44 @@ async function paywallWrite(op: Promise<`0x${string}`>): Promise<`0x${string}`> 
   return hash
 }
 
-// F01 (second design review): the legacy freeze does not stop at copy — the
-// write layer rejects too. purchase/setPrice/markDelivered create new orders
-// or new escrows, where the R01 flaw still applies; refund/confirm/withdraw
-// are existing-fund disposition and stay open (confirm additionally verifies
-// the payee, see assertLegacyPayee). The UI hides the entries too — this is
-// the second gate.
+// F01 (second design review; conditional bug fixed by the third review): the
+// legacy freeze does not stop at copy — the write layer rejects too, and it
+// does so UNCONDITIONALLY: the v1 R01 flaw does not disappear because v2 is
+// deployed, so this guard reads no configuration (the third review found the
+// old guard misused the v2 activation check, which let v1 writes through once
+// v2 was configured). purchase/setPrice/markDelivered create new orders or new
+// escrows, where the R01 flaw still applies; refund/confirm/withdraw are
+// existing-fund disposition and stay open (confirm additionally verifies the
+// payee, see assertLegacyPayee). The UI hides the entries too — this is the
+// second gate.
+export function assertLegacyWriteFrozen(): never {
+  throw new Error(t('errors.paywallLegacyFrozen'))
+}
+
+// v2 activation guard (unrelated to the freeze): v2 write entries use it to
+// reject "v2 unconfigured" calls with a clear error instead of viem's
+// Invalid address.
 export function assertPaywallV2Active(): void {
-  if (!paywallV2Active()) throw new Error(t('errors.paywallLegacyFrozen'))
+  if (!paywallV2Active()) throw new Error(t('errors.paywallV2Required'))
 }
 
 /**
  * F01: a legacy order's "confirm receipt" settles to the CURRENT listing on
- * the v1 contract — the listing can be overwritten by anyone, so the current
- * payee must be verified to still be the order's seller before confirming.
- * Skipped when the seller is unknown (e.g. delisted after purchase): the
- * deal's price was snapshotted and funds flow to listing.seller — the UI says
- * so.
+ * the v1 contract (third review: tightened). Unknown seller (the v1
+ * Purchased event and Deal carry no seller — the row's seller can only be
+ * reverse-looked-up from the current listing) or a removed listing (_settle
+ * would credit the net to the zero address's credits — forever unclaimable,
+ * fee still taken) refuse confirmation; the refund path is unaffected. A
+ * known seller is only a same-source check (compared against the very listing
+ * itself), and the check-to-transaction window remains overwritable (TOCTOU)
+ * — the residual risk is stated in the UI (paywall.legacyConfirmRisk); refund
+ * is recommended for high-value orders. No claim of a safe migration.
  */
 export async function assertLegacyPayee(manifestCid: string | null, expectedSeller: string): Promise<void> {
-  if (!manifestCid || !expectedSeller) return
+  if (!manifestCid || !expectedSeller) throw new Error(t('errors.paywallPayeeUnknown'))
   const listing = await getListing(manifestCid)
-  if (listing && listing.seller.toLowerCase() !== expectedSeller.toLowerCase()) {
+  if (!listing) throw new Error(t('errors.paywallPayeeUnknown'))
+  if (listing.seller.toLowerCase() !== expectedSeller.toLowerCase()) {
     throw new Error(t('errors.paywallPayeeMismatch'))
   }
 }
@@ -140,16 +157,10 @@ const writeOps = (signer: EvmSigner) => {
   const account = accountOf(signer)
   const base = { address: paywallAddress(), abi: PAYWALL_ABI, chain: autoEvmChain, account } as const
   return {
-    // setPrice/purchase/markDelivered are kept for type completeness only —
-    // the three exported wrappers hit the F01 guard first, which always
-    // throws, so these constructors never execute
-    setPrice: (key: `0x${string}`, price: bigint) =>
-      wallet.writeContract({ ...base, functionName: 'setPrice', args: [key, price] }),
-    purchase: (key: `0x${string}`, price: bigint) =>
-      wallet.writeContract({ ...base, functionName: 'purchase', args: [key], value: price }),
-    markDelivered: (key: `0x${string}`, buyer: `0x${string}`) =>
-      wallet.writeContract({ ...base, functionName: 'markDelivered', args: [key, buyer] }),
-    // existing-order disposition entries only
+    // existing-fund disposition entries only — setPrice/purchase/markDelivered
+    // are removed from the constructible surface with the freeze (third
+    // review): the four legacy writes always throw at the export layer, the
+    // v1 write ABI is no longer reachable
     confirmReceipt: (key: `0x${string}`) =>
       wallet.writeContract({ ...base, functionName: 'confirmReceipt', args: [key] }),
     refund: (key: `0x${string}`) =>
@@ -161,23 +172,23 @@ const writeOps = (signer: EvmSigner) => {
   }
 }
 
-// F01: the three legacy writes below are always rejected (regardless of whether
-// v2 is deployed — the v1 freeze is absolute; the R01 flaw does not disappear
-// because v2 exists). The UI removed the entries too; the guard throws
-// synchronously so writeContract is never reached.
-export const setListingPrice = (signer: EvmSigner, manifestCid: string, priceWei: bigint): Promise<`0x${string}`> => {
-  assertPaywallV2Active() // always throws: legacy setPrice is frozen
-  return paywallWrite(writeOps(signer).setPrice(listingKey(manifestCid), priceWei))
+// F01: the four legacy writes below are unconditionally rejected (third-review
+// fix: the old guard misused the v2 activation check as the freeze guard and
+// let writes through once v2 was configured — the freeze is absolute and does
+// not depend on the v2 deployment state). The UI removed the entries too; the
+// guard throws synchronously so wallet/network calls are never reached.
+// Parameters kept for signature stability (underscore prefix = intentionally
+// unused).
+export const setListingPrice = async (_signer: EvmSigner, _manifestCid: string, _priceWei: bigint): Promise<`0x${string}`> => {
+  assertLegacyWriteFrozen()
 }
 
-export const purchase = (signer: EvmSigner, manifestCid: string, priceWei: bigint): Promise<`0x${string}`> => {
-  assertPaywallV2Active() // always throws: legacy purchase is frozen
-  return paywallWrite(writeOps(signer).purchase(listingKey(manifestCid), priceWei))
+export const purchase = async (_signer: EvmSigner, _manifestCid: string, _priceWei: bigint): Promise<`0x${string}`> => {
+  assertLegacyWriteFrozen()
 }
 
-export const markDelivered = (signer: EvmSigner, manifestCid: string, buyer: string): Promise<`0x${string}`> => {
-  assertPaywallV2Active() // always throws: legacy markDelivered is frozen
-  return paywallWrite(writeOps(signer).markDelivered(listingKey(manifestCid), buyer as `0x${string}`))
+export const markDelivered = async (_signer: EvmSigner, _manifestCid: string, _buyer: string): Promise<`0x${string}`> => {
+  assertLegacyWriteFrozen()
 }
 
 export const confirmReceipt = (signer: EvmSigner, manifestCid: string) =>
@@ -344,6 +355,7 @@ export interface OrderViewV2 {
 }
 
 const writeOpsV2 = (signer: EvmSigner) => {
+  assertPaywallV2Active() // a clear error while v2 is unconfigured (instead of viem's Invalid address)
   const wallet = walletClientFor(signer)
   const account = accountOf(signer)
   const base = { address: paywallV2Address()!, abi: PAYWALL_V2_ABI, chain: autoEvmChain, account } as const
@@ -535,33 +547,20 @@ export const isPdGrant = (plain: string): PdGrant | null => {
 }
 
 /**
- * Seller delivery: unwrap K (signature channel first, falling back to the
- * passphrase prompt callback) → box it to the buyer's announced encryption
- * pubkey → pdgrant message → markDelivered. Semi-automatic (the seller's app
- * responds while online).
+ * F01: legacy seller delivery — unconditionally frozen (third-review fix: the
+ * old guard misused the v2 activation check, which let the whole
+ * "unwrap K → pdgrant message → markDelivered" pipeline through once v2 was
+ * configured). The v1 delivery pipeline is removed from the executable
+ * surface with it; parameters kept for signature stability.
  */
 export async function deliverKey(
-  signer: EvmSigner,
-  manifestCid: string,
-  manifest: Manifest | null,
-  buyer: string,
-  getPassphrase: () => Promise<string | null>,
+  _signer: EvmSigner,
+  _manifestCid: string,
+  _manifest: Manifest | null,
+  _buyer: string,
+  _getPassphrase: () => Promise<string | null>,
 ): Promise<{ messageTxHash: string; deliveredTxHash: string }> {
-  assertPaywallV2Active() // F01: legacy delivery is frozen (before any message/tx is sent)
-  if (!manifest?.encryption) throw new Error(t('errors.paywallNotEncrypted'))
-  // self-trade (acceptance path): buyer == seller, the pdgrant channel is unnecessary — only markDelivered
-  if (buyer.toLowerCase() === signer.address.toLowerCase()) {
-    const deliveredTxHash = await markDelivered(signer, manifestCid, buyer)
-    return { messageTxHash: '', deliveredTxHash }
-  }
-  const keyBytes = await unwrapManifestKey(signer, manifest, getPassphrase)
-  const buyerKeyB64 = await getAnnouncedKey(buyer)
-  if (!buyerKeyB64) throw new Error(t('errors.mailboxRecipientNoKey'))
-  const inner = boxEncrypt(publicKeyFromBase64(buyerKeyB64), keyBytes)
-  const grant: PdGrant = { type: 'pdgrant', manifestCid, wrappedK: JSON.stringify(inner) }
-  const sent = await sendEncryptedMessage(signer, buyer, JSON.stringify(grant))
-  const deliveredTxHash = await markDelivered(signer, manifestCid, buyer)
-  return { messageTxHash: sent.txHash, deliveredTxHash }
+  assertLegacyWriteFrozen() // always throws, before any message/tx is sent
 }
 
 /** v2 delivery: same as deliverKey, but markDelivered goes by orderId (order-snapshot model) */
@@ -573,6 +572,7 @@ export async function deliverKeyV2(
   orderId: bigint,
   getPassphrase: () => Promise<string | null>,
 ): Promise<{ messageTxHash: string; deliveredTxHash: string }> {
+  assertPaywallV2Active() // don't start while v2 is unconfigured (before any message/tx is sent)
   if (!manifest?.encryption) throw new Error(t('errors.paywallNotEncrypted'))
   // self-trade (acceptance path): buyer == seller, the pdgrant channel is unnecessary — only markDelivered
   if (buyer.toLowerCase() === signer.address.toLowerCase()) {

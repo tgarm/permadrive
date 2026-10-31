@@ -41,10 +41,21 @@ let server = null
 let rpcUrl = EXTERNAL_RPC
 if (!rpcUrl) {
   const ganache = (await import('ganache')).default
-  const port = 46000 + Math.floor(Math.random() * 8000)
-  server = ganache.server({ chain: { chainId: 1337 }, wallet: { mnemonic: MNEMONIC }, logging: { quiet: true } })
-  await server.listen(port)
-  rpcUrl = `http://127.0.0.1:${port}`
+  // even a random port can collide (an EADDRINUSE hit 47293 once) — retry on
+  // a fresh port so one random collision cannot stall the whole run
+  for (let attempt = 0; ; attempt++) {
+    const port = 46000 + Math.floor(Math.random() * 8000)
+    const candidate = ganache.server({ chain: { chainId: 1337 }, wallet: { mnemonic: MNEMONIC }, logging: { quiet: true } })
+    try {
+      await candidate.listen(port)
+      server = candidate
+      rpcUrl = `http://127.0.0.1:${port}`
+      break
+    } catch (e) {
+      if (e?.code === 'EADDRINUSE' && attempt < 4) continue
+      throw e
+    }
+  }
 }
 // ganache's close() is known to throw on the exit path — swallow it; process
 // teardown reclaims everything anyway

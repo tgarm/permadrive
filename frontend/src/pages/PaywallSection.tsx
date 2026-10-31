@@ -126,7 +126,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
 
   const listNow = async () => {
     if (!evm || !priceEntry || !priceValue) return
-    if (!v2) { say(t('errors.paywallLegacyFrozen')); return } // F01: no listing while v2 is undeployed
+    if (!v2) { say(t('errors.paywallV2Required')); return } // v2 unconfigured: paid downloads are entirely unavailable
     const wei = BigInt(Math.round(Number(priceValue) * 1e18))
     if (wei <= 0n) return
     setBusy(true)
@@ -145,7 +145,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
 
   const unlist = async (entry: RegistryEntry) => {
     if (!evm) return
-    if (!v2) { say(t('errors.paywallLegacyFrozen')); return } // F01: legacy setPrice is frozen
+    if (!v2) { say(t('errors.paywallV2Required')); return } // v2 unconfigured (unreachable: the unlist button only renders when v2)
     setBusy(true)
     try {
       await setListingPriceV2(evm, entry.manifestCid, 0n)
@@ -225,7 +225,7 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
 
   const buy = async (row: ViewRow) => {
     if (!evm || !row.price || !row.seller) return
-    if (!v2) { say(t('errors.paywallLegacyFrozen')); return } // F01: no purchase while v2 is undeployed
+    if (!v2) { say(t('errors.paywallV2Required')); return } // v2 unconfigured: paid downloads are entirely unavailable
     setBusy(true)
     try {
       const price = formatAi3(row.price)
@@ -303,8 +303,10 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
       say(t('paywall.purchasedDecrypted', [manifest.file.name, plainSha.slice(0, 16)]))
       // decrypt success implies receipt confirmation (pays the seller); on
       // failure refund stays available within the grace period.
-      // F01: legacy confirmation settles to the CURRENT listing — verify the
-      // payee is still the order's seller before releasing funds
+      // F01: legacy confirmation settles to the CURRENT listing — third review
+      // tightened: unknown seller / removed listing refuse confirmation
+      // (the net would be locked into 0x0 credits); a known seller still
+      // carries TOCTOU residual risk (stated on the confirm button)
       if (pv.contract === 'v2') await confirmReceiptV2(evm, pv.orderId!)
       else {
         await assertLegacyPayee(pv.entry.manifestCid, pv.seller)
@@ -324,9 +326,11 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
     try {
       if (pv.contract === 'v2') await confirmReceiptV2(evm, pv.orderId!)
       else {
-        // legacy: only the key is available when entry is missing. F01:
-        // confirmation settles to the current listing — verify the payee first
-        // (skipped for legacy rows with an unknown seller; the UI says so)
+        // legacy: only the key is available when entry is missing. F01 (third
+        // review tightened): confirmation settles to the current listing —
+        // unknown seller / removed listing refuse confirmation (the net would
+        // be locked into 0x0 credits), only the refund path remains; a known
+        // seller still carries TOCTOU residual risk (stated on the button)
         await assertLegacyPayee(pv.entry?.manifestCid ?? null, pv.seller)
         await confirmReceiptByKey(evm, pv.key as `0x${string}`)
       }
@@ -522,7 +526,12 @@ export function PaywallSection({ getPassphrase, onNotice }: { getPassphrase: () 
                                 {t('paywall.downloadPurchased')}
                               </button>
                             )}{' '}
-                            <button className="btn ghost small" disabled={busy} onClick={() => void confirm(pv)}>
+                            <button
+                              className="btn ghost small"
+                              disabled={busy}
+                              onClick={() => void confirm(pv)}
+                              title={pv.contract === 'legacy' ? t('paywall.legacyConfirmRisk') : undefined}
+                            >
                               {t('paywall.confirmReceipt')}
                             </button>{' '}
                             <button className="btn ghost small" disabled={busy} onClick={() => void refundRow(pv)}>
