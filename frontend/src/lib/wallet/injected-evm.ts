@@ -1,4 +1,8 @@
-// injected EVM wallet connection (the production path): window.ethereum (EIP-1193).
+// injected EVM wallet discovery and connection (the production path).
+// Discovery: EIP-6963 multi-wallet announcements (MetaMask / Rabby etc. each
+// report their own provider when several are installed); if nothing announces
+// within the timeout, fall back to legacy window.ethereum (a .providers array
+// when several wallets coexist, with brand flags used to guess the name).
 // Connect = eth_requestAccounts + making sure the wallet is on Auto-EVM (870):
 // wallets without the chain return 4902 for wallet_switchEthereumChain, in
 // which case fall back to wallet_addEthereumChain.
@@ -8,16 +12,86 @@ import { AUTO_EVM_CHAIN_ID, walletAddChainParams } from '../evm'
 import type { EvmSigner } from './types'
 import { t } from '../../i18n'
 
-// window.ethereum has no standard lib.dom type (each wallet injects its own)
-const getInjected = (): EIP1193Provider | undefined => (window as { ethereum?: EIP1193Provider }).ethereum
-
-export function hasInjectedEvm(): boolean {
-  return !!getInjected()
+// wallet metadata announced via EIP-6963 (info.icon is a dataURI; this app
+// uses text-only buttons and ignores it)
+interface Eip6963ProviderInfo {
+  uuid: string
+  name: string
+  icon: string
+  rdns: string
 }
 
-export async function connectInjectedEvm(): Promise<EvmSigner> {
+export interface DiscoveredEvmWallet {
+  /** display name (a proper noun such as MetaMask; same convention as the Substrate-side w.title) */
+  name: string
+  /** stable identifier (written by the lib layer; the brand name as-is, or 'injected' for legacy wallets of unknown brand — WalletBar maps it to a display name) */
+  label: string
+  provider: EIP1193Provider
+}
+
+// window.ethereum has no standard lib.dom type (each wallet injects its own)
+const getInjected = (): (EIP1193Provider & { providers?: EIP1193Provider[] }) | undefined =>
+  (window as { ethereum?: EIP1193Provider & { providers?: EIP1193Provider[] } }).ethereum
+
+// legacy brand flag → display name. Order is priority: wallet-specific flags
+// first, isMetaMask last — many wallets set it for compatibility (Rabby and
+// others set both).
+const BRAND_FLAGS: Array<[string, string]> = [
+  ['isRabby', 'Rabby'],
+  ['isCoinbaseWallet', 'Coinbase Wallet'],
+  ['isPhantom', 'Phantom'],
+  ['isTrust', 'Trust Wallet'],
+  ['isBraveWallet', 'Brave Wallet'],
+  ['isOKExWallet', 'OKX'],
+  ['isOkxWallet', 'OKX'],
+  ['isTokenPocket', 'Token Pocket'],
+  ['isBitKeep', 'BitKeep'],
+  ['isMetaMask', 'MetaMask'],
+]
+
+const brandName = (provider: EIP1193Provider): string | undefined => {
+  for (const [flag, name] of BRAND_FLAGS) {
+    if ((provider as Record<string, unknown>)[flag] === true) return name
+  }
+  return undefined
+}
+
+// legacy fallback: window.ethereum (a providers array when several wallets coexist,
+// the transitional pattern predating EIP-5749)
+const listLegacyProviders = (): EIP1193Provider[] => {
   const eth = getInjected()
-  if (!eth) throw new Error(t('errors.noEvmWalletDetected'))
+  if (!eth) return []
+  if (Array.isArray(eth.providers) && eth.providers.length > 0) return eth.providers
+  return [eth]
+}
+
+// EIP-6963 discovery + legacy fallback, normalized to a DiscoveredEvmWallet list.
+// Requests announcements and waits briefly (wallets listen for requestProvider
+// and answer asynchronously); the wait does not block the UI.
+export async function discoverEvmWallets(timeoutMs = 500): Promise<DiscoveredEvmWallet[]> {
+  const found = new Map<string, DiscoveredEvmWallet>()
+  const onAnnounce = (e: Event) => {
+    const detail = (e as CustomEvent).detail as { info?: Eip6963ProviderInfo; provider?: EIP1193Provider } | undefined
+    const info = detail?.info
+    if (!info?.uuid || !info.name || !detail?.provider) return
+    if (found.has(info.uuid)) return
+    found.set(info.uuid, { name: info.name, label: info.name, provider: detail.provider })
+  }
+  window.addEventListener('eip6963:announceProvider', onAnnounce)
+  window.dispatchEvent(new Event('eip6963:requestProvider'))
+  await new Promise((resolve) => setTimeout(resolve, timeoutMs))
+  window.removeEventListener('eip6963:announceProvider', onAnnounce)
+  if (found.size > 0) return [...found.values()]
+  return listLegacyProviders().map((provider) => {
+    const name = brandName(provider)
+    return name
+      ? { name, label: name, provider }
+      : { name: t('wallet.connectEvm'), label: 'injected', provider }
+  })
+}
+
+export async function connectEvmWallet(wallet: DiscoveredEvmWallet): Promise<EvmSigner> {
+  const eth = wallet.provider
   const accounts = (await eth.request({ method: 'eth_requestAccounts' })) as string[]
   if (!accounts?.length) throw new Error(t('errors.evmNoAccounts'))
   try {
@@ -33,5 +107,5 @@ export async function connectInjectedEvm(): Promise<EvmSigner> {
     throw new Error(t('errors.evmWrongChain', [chainIdHex]))
   }
   // the label is a stable identifier (not copy); WalletBar maps it to a display name in the active locale
-  return { kind: 'injected', address: accounts[0], provider: eth, label: 'injected' }
+  return { kind: 'injected', address: accounts[0], provider: eth, label: wallet.label }
 }
