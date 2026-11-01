@@ -7,8 +7,9 @@ import { FirstUseGuide } from './FirstUseGuide'
 // set lives in IndexedDB (rootCid key); archive (indexer mapping) progress is
 // local task state, never part of the manifest.
 // Row action "sync to the on-chain registry" (republish the manifest + the
-// FileRegistry entry) and "recover from the on-chain registry" (read the
-// registry → block scan → restore the manifest set).
+// FileRegistry entry). The directory reconciles incrementally on wallet
+// connect, and the "Refresh" button re-runs the same incremental
+// reconciliation manually.
 // Encrypted upload: K + AES-GCM → the ciphertext is packed into the standard
 // DAG → the manifest v2 encryption block. Download decrypts via the signature
 // channel first, falling back to a passphrase dialog.
@@ -376,9 +377,11 @@ function ConnectedFilesPage() {
 
   // Directory reconciliation = read registry entries → incremental block scan to
   // restore manifests → store (the cross-device main path). Runs once
-  // automatically on connect (auto=true: only entries not yet reconciled, never
-  // resurrects locally deleted files); the manual button (auto=false) keeps the
-  // full-rescan semantics (an explicit intent is what brings deleted files back).
+  // automatically on connect (auto=true: silent — the waiting card or the file
+  // table is the feedback); the "Refresh" button (auto=false) runs the same
+  // incremental reconciliation, it just says the outcome out loud. Neither
+  // resurrects locally deleted files (to get them back: a new browser or a
+  // cleared site reconnects and restores from the registry).
   // The whole flow is read-only chain access + local writes, no wallet prompts.
   const runDirectorySync = async (auto = false) => {
     if (!evmSigner || recoverBusy) return
@@ -392,7 +395,6 @@ function ConnectedFilesPage() {
       const result: DirectorySyncResult = await syncDirectoryFromRegistry(
         {
           address: evmSigner.address,
-          rescanAll: !auto,
           fetchEntries,
           listManifests,
           listRegistryRecords,
@@ -410,9 +412,9 @@ function ConnectedFilesPage() {
       setDirCheck({ state: 'done', pending: !result.empty && result.failed.length > 0 })
       await refresh()
       // summary: in auto mode an empty directory / nothing new stays silent (the
-      // waiting card or the file table is the feedback); the manual mode keeps
-      // the original copy. Failed entries are listed by name; a retry only
-      // re-processes them.
+      // waiting card or the file table is the feedback); an explicit "Refresh"
+      // says the outcome out loud. Failed entries are listed by name; a retry
+      // only re-processes them.
       if (result.empty) {
         setRecoverState(auto ? null : t('files.registryEmpty', [evmSigner.address.slice(0, 10) + '…']))
         return
@@ -511,7 +513,7 @@ function ConnectedFilesPage() {
           <h2>{t('files.myFiles')}</h2>
           <div className="row-actions">
             <button className="btn ghost small" onClick={() => void runDirectorySync(false)} disabled={recoverBusy}>
-              {t('files.recoverFromRegistry')}
+              {t('files.refresh')}
             </button>
           </div>
         </div>

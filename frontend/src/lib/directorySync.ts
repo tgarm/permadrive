@@ -1,5 +1,5 @@
-// Incremental on-chain directory reconciliation (the orchestration layer behind
-// the files page's automatic recovery).
+// Incremental on-chain directory reconciliation (the orchestration layer shared
+// by the files page's automatic recovery and its "Refresh" button).
 //
 // fetchEntries is a single full-array view call (cheap, read-only, no wallet
 // prompt); the only expensive part is the per-entry block scan
@@ -10,9 +10,9 @@
 // marker — the per-entry equivalent of a cursor, which naturally supports
 // retrying partial failures (a failed entry has no record and is retried next
 // time) without cursor checkpoint/reorg bookkeeping. Deleting a file locally
-// keeps its record, so automatic recovery never resurrects deleted files; the
-// manual mode (rescanAll) rescans everything — an explicit intent is what
-// brings deleted files back.
+// keeps its record, so reconciliation never resurrects deleted files (to get
+// them back: a new browser or a cleared site reconnects and restores from the
+// registry — the directory is the only backup entry point).
 //
 // All dependencies are injected: directly testable in Node via type-stripping
 // (scripts/verify/directory-sync-test.mjs); the browser wires it in FilesPage.
@@ -33,8 +33,6 @@ export interface DirectorySyncFailure {
 
 export interface DirectorySyncDeps {
   address: string
-  /** true = the manual "recover from registry" button: rescan everything (can bring back locally deleted files) */
-  rescanAll?: boolean
   fetchEntries: (address: string) => Promise<DirectoryEntry[]>
   listManifests: () => Promise<Manifest[]>
   listRegistryRecords: () => Promise<RegistryRecord[]>
@@ -75,9 +73,7 @@ export async function syncDirectoryFromRegistry(
   for (const r of records) {
     if (r.evmAddress.toLowerCase() === addr) known.add(r.manifestCid)
   }
-  const knownRootCids = new Set<string>()
   for (const m of manifests) {
-    knownRootCids.add(m.rootCid)
     known.add(m.rootCid)
     if (m.recovery) known.add(m.recovery.manifestCid)
   }
@@ -88,7 +84,7 @@ export async function syncDirectoryFromRegistry(
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]
     onProgress?.({ index: i, total: entries.length, entry })
-    if (!deps.rescanAll && known.has(entry.manifestCid)) {
+    if (known.has(entry.manifestCid)) {
       skipped++
       continue
     }
@@ -102,13 +98,10 @@ export async function syncDirectoryFromRegistry(
         evmAddress: deps.address,
         syncedAt: Date.now(),
       })
-      // the manual full rescan keeps the historical counting: on-chain entries
-      // whose manifest is already local count as skipped
-      if (deps.rescanAll && knownRootCids.has(manifest.rootCid)) skipped++
-      else recovered++
+      recovered++
     } catch (e) {
       // one failure does not abort the run: the failed entry has no record, so
-      // the next automatic sync / manual retry only re-processes failures
+      // the next automatic sync / manual refresh only re-processes failures
       failed.push({ name: entry.name, message: (e as Error).message })
     }
   }

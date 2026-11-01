@@ -43,6 +43,6 @@ export function WalletBalance({ chain, address }: { chain: 'consensus' | 'evm'; 
   const visible = state?.key === key ? state : null
   return <div className={`wallet-balance txt-${chain}`} data-testid={`wallet-balance-${chain}`}>
     <span role="status">{t(chain === 'consensus' ? 'wallet.availableBalance' : 'wallet.balance')}: {visible?.amount !== undefined ? `${formatAi3(visible.amount)} AI3` : visible?.failed ? t('wallet.balanceFailed') : t('wallet.balanceLoading')}</span>
-    <button className="btn ghost small" disabled={visible?.loading} onClick={() => void refresh()} aria-label={t('wallet.refreshBalance')}>{t('wallet.refreshBalance')}</button>
+    <button className="btn ghost small icon" disabled={visible?.loading} onClick={() => void refresh()} aria-label={t('wallet.refreshBalance')} title={t('wallet.refreshBalance')}>⟳</button>
   </div>
 }

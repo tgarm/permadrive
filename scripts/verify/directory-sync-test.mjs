@@ -1,8 +1,8 @@
 // Offline tests for the incremental directory reconciliation: the RegistryRecord
 // as the per-entry "already reconciled" marker, incremental skipping, one
-// failure not aborting the run, retries only re-processing failures, automatic
-// recovery not resurrecting locally deleted files, and the manual rescanAll
-// semantics. Pure dependency injection — no network, no cost.
+// failure not aborting the run, retries only re-processing failures, and no
+// resurrection of locally deleted files (recovery goes through a fresh browser
+// / cleared site). Pure dependency injection — no network, no cost.
 //   node directory-sync-test.mjs
 
 import assert from 'node:assert/strict'
@@ -35,13 +35,12 @@ const manifestFor = (entry) => ({
 })
 
 // fake deps: entries/manifests/records injectable; recover fails per recoverErrorFor
-function makeDeps({ entries = [], manifests = [], records = [], address = ADDR, rescanAll = false, recoverErrorFor = null } = {}) {
+function makeDeps({ entries = [], manifests = [], records = [], address = ADDR, recoverErrorFor = null } = {}) {
   const localManifests = manifests.map((m) => structuredClone(m))
   const localRecords = records.map((r) => structuredClone(r))
   const calls = { recover: [], putManifest: [], putRecord: [], progress: [] }
   const deps = {
     address,
-    rescanAll,
     fetchEntries: async () => entries,
     listManifests: async () => localManifests,
     listRegistryRecords: async () => localRecords,
@@ -145,17 +144,13 @@ const record = (manifestCid, height = 100, address = ADDR) => ({ rootCid: 'root-
   ok(calls.recover.filter((c) => c === 'cid-bad').length === 2 && calls.recover.filter((c) => c === 'cid-ok').length === 1, '8 the failed entry is retried, the success is never scanned again')
 }
 
-// ---- 9. automatic recovery does not resurrect locally deleted files (record kept → skip) ----
+// ---- 9. no resurrection of locally deleted files (record kept → skip; recovery = fresh browser / cleared site) ----
 {
   const entries = [entry('cid-deleted', 300)]
   const records = [record('cid-deleted', 300)] // manifest deleted locally, record kept
   const { deps, calls } = makeDeps({ entries, records })
   const r = await syncDirectoryFromRegistry(deps)
-  ok(r.skipped === 1 && calls.recover.length === 0 && calls.putManifest.length === 0, '9 deleted files are not resurrected')
-  // manual rescanAll: an explicit intent brings them back
-  const manual = makeDeps({ entries, records, rescanAll: true })
-  const r2 = await syncDirectoryFromRegistry(manual.deps)
-  ok(r2.recovered === 1 && manual.calls.recover.length === 1, '9 manual rescanAll recovers everything')
+  ok(r.skipped === 1 && calls.recover.length === 0 && calls.putManifest.length === 0, '9 deleted files are not resurrected (same for automatic and "Refresh")')
 }
 
 // ---- 10. progress callback: per-entry index/total/entry ----
@@ -165,15 +160,6 @@ const record = (manifestCid, height = 100, address = ADDR) => ({ rootCid: 'root-
   const seen = []
   await syncDirectoryFromRegistry(deps, (p) => seen.push(`${p.index}/${p.total}:${p.entry.name}@${p.entry.height}`))
   ok(seen.join('|') === '0/2:alpha.txt@401|1/2:beta.txt@402', '10 progress callback sequence correct')
-}
-
-// ---- 11. manual rescanAll counting: rescanned but already local = skipped ----
-{
-  const entries = [entry('cid-have', 500), entry('cid-fresh', 501)]
-  const manifests = [manifestFor(entry('cid-have', 500))]
-  const { deps } = makeDeps({ entries, manifests, rescanAll: true })
-  const r = await syncDirectoryFromRegistry(deps)
-  ok(r.recovered === 1 && r.skipped === 1 && r.total === 2, '11 rescanAll keeps the historical counting (new / already present)')
 }
 
 console.log(`\n${passed} assertions passed`)

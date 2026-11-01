@@ -506,6 +506,12 @@ select:focus {
   font-size: 12px;
 }
 
+/* icon-only button (e.g. the balance refresh glyph) */
+.btn.icon {
+  padding: 4px 8px;
+  line-height: 1;
+}
+
 .btn.link {
   background: none;
   border: none;
