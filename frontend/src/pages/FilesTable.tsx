@@ -18,7 +18,6 @@ interface FilesTableProps {
   shareInfoByRoot: Map<string, ShareInfo>
   sharePanelRoot: string | null
   onDownload: (m: Manifest) => void
-  onExport: (m: Manifest) => void
   onSync: (m: Manifest) => void
   onDelete: (m: Manifest) => void
   onShare: (m: Manifest) => void
@@ -50,7 +49,6 @@ export function FilesTable({
   shareInfoByRoot,
   sharePanelRoot,
   onDownload,
-  onExport,
   onSync,
   onDelete,
   onShare,
@@ -119,9 +117,6 @@ export function FilesTable({
                   </button>
                   <button className={`btn ghost small ${sharePanelRoot === m.rootCid ? 'active' : ''}`} onClick={() => onShare(m)}>
                     {t('files.shareBtn')}
-                  </button>
-                  <button className="btn ghost small" onClick={() => onExport(m)}>
-                    {t('files.manifestBtn')}
                   </button>
                   <button className="btn ghost small" onClick={() => onSync(m)} disabled={syncing.has(m.rootCid)}>
                     {t('files.syncRegistry')}

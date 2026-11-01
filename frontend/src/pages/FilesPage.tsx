@@ -23,7 +23,7 @@ import { useSigner } from '../signer-context'
 import { Hint } from '../components/Hint'
 import { sha256Hex } from '../lib/bytes'
 import { loadConfig } from '../lib/config'
-import { migrateManifest, type Manifest } from '../lib/manifest'
+import { type Manifest } from '../lib/manifest'
 import { retrieveFile } from '../lib/retrieve'
 import { publishManifestToChain } from '../lib/manifestPublish'
 import { recoverManifestFromHint } from '../lib/manifestRecover'
@@ -54,7 +54,7 @@ import { SharePanel } from './SharePanel'
 import { UploadCard } from './UploadCard'
 import { deriveShareInfo, type ShareInfo } from '../lib/shareState'
 import { putManifestPublishMeta } from '../lib/manifestPublish'
-import { nodeCount, useI18n } from '../i18n'
+import { useI18n } from '../i18n'
 
 type RowBusy = Record<string, string>
 
@@ -62,7 +62,6 @@ export function FilesPage() {
   const { t } = useI18n()
   const { connect } = useChain()
   const { active: activeSigner, evm: evmSigner } = useSigner()
-  const [exportedRoots, setExportedRoots] = useState<Set<string>>(new Set())
   const [verifiedRoots, setVerifiedRoots] = useState<Set<string>>(new Set())
   const [manifests, setManifests] = useState<Manifest[]>([])
   const [tasks, setTasks] = useState<TaskRecord[]>([])
@@ -81,7 +80,6 @@ export function FilesPage() {
   // three-state sharing: per-file on-chain derived badges + the share panel anchor
   const [shareInfos, setShareInfos] = useState<Map<string, ShareInfo>>(new Map())
   const [sharePanelRoot, setSharePanelRoot] = useState<string | null>(null)
-  const importInputRef = useRef<HTMLInputElement>(null)
   const watching = useRef(new Set<string>())
 
   const refreshPendingPublish = useCallback(async () => {
@@ -250,28 +248,8 @@ export function FilesPage() {
     }
   }
 
-  const importManifest = async (file: File) => {
-    setNotice(null)
-    try {
-      const manifest = migrateManifest(JSON.parse(await file.text()))
-      await putManifest(manifest)
-      await refresh()
-      setNotice(t('files.importNotice', [manifest.file.name, nodeCount(manifest.nodes.length)]))
-    } catch (e) {
-      setNotice(t('files.importFailed', [(e as Error).message]))
-    }
-  }
-
-  const exportManifest = (manifest: Manifest) => {
-    setExportedRoots((old) => new Set(old).add(manifest.rootCid))
-    saveBlob(new TextEncoder().encode(JSON.stringify(manifest, null, 2)), `${manifest.file.name}.manifest.json`, 'application/json')
-  }
-
-  // ---- On-chain registry (FileRegistry on Auto-EVM) ----
-
   const syncedRootCids = new Set(registryRecords.map((r) => r.rootCid))
 
-  // Sync = republish the manifest into the DSN (Substrate signature) + registry entry (EVM signature)
   const syncToRegistry = async (manifest: Manifest) => {
     setNotice(null)
     if (!activeSigner) {
@@ -287,6 +265,7 @@ export function FilesPage() {
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.alreadyHosted', [existing.manifestCid.slice(0, 16), existing.height]) }))
       return
     }
+    if (!window.confirm(t('onboarding.backupConfirm'))) return
     setSyncing((s) => new Set(s).add(manifest.rootCid))
     try {
       const api = await connect()
@@ -419,10 +398,11 @@ export function FilesPage() {
         storageConnected={!!activeSigner}
         recoveryConnected={!!evmSigner}
         fileName={manifests[0]?.file.name ?? null}
-        backedUp={!!manifests[0] && (exportedRoots.has(manifests[0].rootCid) || registryRecords.some((r) => r.rootCid === manifests[0].rootCid))}
+        backedUp={!!manifests[0] && registryRecords.some((r) => r.rootCid === manifests[0].rootCid)}
         verified={!!manifests[0] && verifiedRoots.has(manifests[0].rootCid)}
         onUpload={() => document.getElementById('first-upload')?.scrollIntoView({ behavior: 'smooth' })}
-        onBackup={() => { if (manifests[0]) exportManifest(manifests[0]) }}
+        onBackup={() => { if (manifests[0]) void syncToRegistry(manifests[0]) }}
+        busy={!!manifests[0] && syncing.has(manifests[0].rootCid)}
         onVerify={() => { if (manifests[0]) void download(manifests[0]) }}
       />
       <div id="first-upload" />
@@ -440,24 +420,10 @@ export function FilesPage() {
         <div className="card-head">
           <h2>{t('files.myFiles')}</h2>
           <div className="row-actions">
-            <button className="btn ghost small" onClick={() => importInputRef.current?.click()}>
-              {t('files.importManifest')}
-            </button>
             <button className="btn ghost small" onClick={() => void recoverFromRegistry()} disabled={recoverBusy}>
               {t('files.recoverFromRegistry')}
             </button>
           </div>
-          <input
-            ref={importInputRef}
-            type="file"
-            accept=".json,application/json"
-            hidden
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) void importManifest(f)
-              e.target.value = ''
-            }}
-          />
         </div>
         <PendingPublishNotice
           records={pendingPublish}
@@ -476,7 +442,6 @@ export function FilesPage() {
           shareInfoByRoot={shareInfos}
           sharePanelRoot={sharePanelRoot}
           onDownload={(m) => void download(m)}
-          onExport={exportManifest}
           onSync={(m) => void syncToRegistry(m)}
           onDelete={(m) => void removeManifest(m)}
           onShare={(m) => setSharePanelRoot((cur) => (cur === m.rootCid ? null : m.rootCid))}

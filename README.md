@@ -16,9 +16,9 @@ Files are packed into IPLD DAGs in the browser and published directly to the Aut
 - **Wallet-native identity** — sign in with a Substrate extension wallet (Talisman / SubWallet / polkadot.js); an EVM wallet handles registry operations on Auto-EVM
 - **Permanent storage, pay per use** — pay the on-chain byte fee directly (~2.1 AI3/MB, about half the official AutoDrive price, with no 90-day credit expiry)
 - **No required backend** — the build output is fully static and hostable anywhere; all dependencies (RPC, indexer) are permissionless public infrastructure with CORS enabled (browser-direct)
-- **Manifest as proof** — a single JSON manifest describes everything needed for retrieval; export / import / share it
+- **On-chain recovery directory** — recovery manifests are stored on-chain and registered to your wallet; no manual manifest import/export is required
 - **Cross-device recovery** — on a new device, the same wallet signature recovers the full file index from the on-chain registry and re-downloads the files
-- **Encrypted files** — opt-in upload encryption: a random data key encrypts the file (AES-256-GCM) before the standard DAG packing, and the key is wrapped with your EVM wallet signature plus an optional passphrase; downloads decrypt automatically with a passphrase dialog as the fallback. Filenames and sizes stay public; the content is yours only (manifest v2, `pdenc-v1`)
+- **Encrypted files** — all new files are encrypted: a random data key encrypts the file (AES-256-GCM) before the standard DAG packing, and the key is wrapped with your EVM wallet signature plus an optional passphrase; downloads decrypt automatically with a passphrase dialog as the fallback. Filenames and sizes stay public; the content is yours only (manifest v2, `pdenc-v1`)
 - **On-chain private messages** — end-to-end encrypted mail between addresses (x25519-xsalsa20-poly1305, MetaMask-compatible envelopes or locally derived keypairs). Who talks to whom, when, and ciphertext length are public; only the content is private. receiving must be enabled once from the Messages page (one explicit action: the wallet asks for your encryption public key — no gas — and, if needed, publishes it in a separate gas-paid transaction)
 - **Direct sales** — sell encrypted files for AI3: the purchase transaction pays the seller directly (10% platform fee) in the same block — no escrow, no platform refund; buyers rate purchases on-chain (helpful / not-as-described, one vote per buyer per product, changeable). The file key is delivered as ciphertext over the private-message channel (pdgrant v3, bound to the sales contract and order). Delivery is manual: the seller delivers when online, and the purchase flow says so before you pay. Digital-goods mode: buying grants the file itself, there is no DRM
 - **Sharing (three states)** — every encrypted file is unshared, for-sale, or public, and the state only moves one way. "Public" sells the file to a public publisher contract at 1 wei in the same transaction that publishes the file key in a `Published` event — permanent, atomic, no "received but withheld" middle state. Public files download from a share link (`#/s?m&h&o[&k]`) with **no wallet at all**: the key comes from the link or from the on-chain event, and the decrypted content is checked against the event's published digest before saving. Broadcasting counts as publishing (a failed transaction does not make the file private again); delisting never revokes keys already delivered to buyers
@@ -51,7 +51,7 @@ npm run build    # static output → dist/ (deployable to any static host)
 
 - Connect an extension wallet, or use "Local key (dev)" with a mnemonic (memory only, lost on refresh)
 - Upload: pick a file → confirm the fee → sign → 12-block confirmation → background DSN archiving watch
-- Download: nodes are fetched from the chain and reassembled, sha256 verified automatically; manifests can be exported/imported
+- Download: nodes are fetched from the chain and reassembled, sha256 verified automatically; recover files through the on-chain wallet directory
 
 ## Deploy (Vercel)
 
@@ -102,7 +102,7 @@ Deployment records (tx / block) live in [contracts/deployments.json](contracts/d
 
 ## Notes
 
-- **On-chain data is public by default** — anyone can read it. Plain "My files" uploads and Notes publish in the clear (Notes are plaintext by design; private text belongs in the Vault, whose envelope is ciphertext, or in an encrypted-file upload, whose content is ciphertext). File encryption protects the content only — filenames, sizes and ciphertext stay public. Index ownership is not access control; do not publish anything you don't want public.
+- **On-chain data is public by default** — anyone can read it. Historical plaintext files and Notes are readable in the clear; all new My Files uploads are encrypted (Notes are plaintext by design; private text belongs in the Vault, whose envelope is ciphertext, or in an encrypted-file upload, whose content is ciphertext). File encryption protects the content only — filenames, sizes and ciphertext stay public. Index ownership is not access control; do not publish anything you don't want public.
 - **The vault keystore is the only universal recovery path** — wallet-signature unlock depends on reproducible signatures (verified for local EVM keys; most extension wallets work, some may not). Losing both the wallet AND the keystore file means the ciphertext stays on-chain forever but can never be opened.
 - **Public RPCs are rate-limited** — the scripts throttle and back off; do not hammer public nodes with concurrency.
 - **Confirmation policy** — publishes confirm at 12-block depth + canonical check (Autonomys testnet finality lag can reach 15 days; never wait for finalized).
@@ -123,6 +123,6 @@ More from the same family — open-source, pure-frontend tools for Autonomys:
 
 ## First-use guidance and browser checks
 
-My Files includes a five-step storage guide with account readiness, a recovery-JSON export action and a download-integrity check. Checks refer to the first file in the list; export and verification are session-only and do not prove an offline backup was safely retained. On-chain directory backup remains optional and separately charged.
+My Files provides four visual steps: connect accounts, create an encrypted file, save its on-chain recovery directory, then download and verify. New files are always encrypted; sharing and publication are later actions. Manifest import/export is not part of the user flow. Directory saving requires separate consensus storage and EVM registration fees; until it completes, the file has no wallet-directory recovery backup. Keep your wallet/passphrase safe. Verification checks are session-only.
 
 Browser checks live in `scripts/verify/browser/`. From `scripts/verify`, install dependencies, run `npx playwright install chromium`, then `npm run browser`. The default suite uses an unfunded wallet sentinel and mock chain fixtures; it never broadcasts transactions. An optional real public-download fixture needs `PD_PUBLIC_SHARE_URL` and `PD_PUBLIC_SHA256`. Real extension-wallet compatibility and mainnet transaction acceptance are separate checks.

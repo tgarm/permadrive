@@ -553,15 +553,15 @@
   },
   "onboarding": {
     "title": "Save your first file",
-    "intro": "Follow these five steps. No wallet request is sent until you choose an action.",
+    "intro": "Create privately, save your recovery directory on-chain, then verify your file. Share or publish later from the file panel.",
     "privacy": "Choose your file and privacy",
     "privacyHelp": "Encryption is recommended and enabled by default. Public uploads cannot be taken back; encrypted files still reveal their name and size.",
     "wallet": "Prepare the storage account",
     "walletHelp": "The consensus-chain account pays storage fees. Encrypted uploads also require an EVM account for recovery signatures; its balance is separate. Keep an independent recovery passphrase.",
-    "upload": "Review the fee and upload",
-    "uploadHelp": "Choose a file below, review the estimated storage fee, then explicitly sign the upload. If the result is unknown, verify it rather than pay again.",
-    "backup": "Keep a recovery route",
-    "backupHelp": "Export the file recovery JSON or back up its directory on-chain. Directory backup costs extra. The JSON locates the file; encrypted content still needs your wallet or passphrase.",
+    "upload": "Create an encrypted file",
+    "uploadHelp": "All new files are encrypted before upload. Review the storage fee and sign; public sharing is a separate, later action. Filenames and sizes remain visible.",
+    "backup": "Save the on-chain directory",
+    "backupHelp": "Save the recovery manifest on-chain and register it to your EVM account. This step has separate consensus storage and EVM fees. Until it finishes, browser-only records are not a cross-device backup.",
     "verify": "Download and verify",
     "verifyHelp": "Download once and check integrity. This does not publish your file or release a payment.",
     "done": "Available",
@@ -570,8 +570,9 @@
     "recoveryMissing": "EVM recovery account not connected. Connect it in the header for encrypted upload or cross-device directory backup. Public downloads do not need a wallet.",
     "selected": "Guide file: {0}",
     "start": "Choose a file below",
-    "backupAction": "Export recovery JSON",
+    "backupAction": "Save directory on-chain",
     "verifyAction": "Download and verify",
-    "sessionNotice": "Checks refer to the first file in your current list. Export and verification checks are recorded only for this page session; downloading JSON does not prove you stored it safely."
+    "sessionNotice": "Upload and directory backup are separate steps. Both must finish for wallet-directory recovery. Keep your wallet/passphrase safe; the final download check lasts only for this page session.",
+    "backupConfirm": "Save the recovery directory on-chain? You will sign a consensus storage transaction and an EVM directory registration transaction, with separate fees. File contents remain encrypted."
   }
 }

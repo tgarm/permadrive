@@ -902,3 +902,10 @@ textarea:focus {
 .advanced-options .warning {
   margin: 6px 0 0;
 }
+
+/* Storage onboarding follows real account, file and registry state. */
+.storage-steps { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; list-style:none; padding:0; margin:20px 0; }
+.storage-steps li { display:flex; gap:12px; padding:16px; border:1px solid var(--border, #7776); border-radius:12px; }
+.storage-steps li.is-done { border-color:var(--chain-consensus); }
+.storage-step-number { display:grid; place-items:center; flex-shrink:0; width:32px; height:32px; border-radius:50%; background:var(--chain-consensus); color:#102020; font-weight:700; }
+.storage-steps p { font-size:.9em; line-height:1.6; }

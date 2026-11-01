@@ -59,7 +59,6 @@ export function UploadCard({
   const [dragOver, setDragOver] = useState(false)
   // Encrypted by default: sharing is a later action in the file panel, not an
   // upload-time decision; plaintext is an explicit (advanced) choice
-  const [encryptOn, setEncryptOn] = useState(true)
   const [uploadPassphrase, setUploadPassphrase] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -69,7 +68,7 @@ export function UploadCard({
       setUpload({ fileName: file.name, fileSize: file.size, stage: 'error', error: t('files.maxSizeError', [formatBytes(MAX_UPLOAD_BYTES)]) })
       return
     }
-    if (encryptOn) {
+    {
       if (!evmSigner) {
         setUpload({ fileName: file.name, fileSize: file.size, stage: 'error', error: t('files.encryptNeedEvm') })
         return
@@ -93,15 +92,6 @@ export function UploadCard({
         setUpload((u) => (u ? { ...u, stage: 'error', error: (e as Error).message } : u))
       }
       return
-    }
-    setUpload({ fileName: file.name, fileSize: file.size, stage: 'packing' })
-    try {
-      const prepared = await prepareUpload(file)
-      const api = await connect()
-      const fee = await estimateFee(api, prepared.totalBytes)
-      setUpload((u) => (u ? { ...u, prepared, fee, stage: 'awaiting-confirm' } : u))
-    } catch (e) {
-      setUpload((u) => (u ? { ...u, stage: 'error', error: (e as Error).message } : u))
     }
   }
 
@@ -185,14 +175,6 @@ export function UploadCard({
           born-public warning */}
       <div className="encrypt-toggle-row">
         <span className="muted">🔒 {t('files.encryptDefault')}</span>
-        <details className="advanced-options">
-          <summary>{t('files.advancedOptions')}</summary>
-          <label>
-            <input type="checkbox" checked={!encryptOn} onChange={(e) => setEncryptOn(!e.target.checked)} />
-            <span>🌐 {t('files.plaintextOptIn')}</span>
-          </label>
-          {!encryptOn && <p className="warning">{t('files.plainWarning')}</p>}
-        </details>
       </div>
 
       {upload && (
