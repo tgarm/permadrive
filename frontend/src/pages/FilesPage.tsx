@@ -25,7 +25,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useChain } from '../chain-context'
 import { useSigner } from '../signer-context'
 import { Hint } from '../components/Hint'
-import { sha256Hex } from '../lib/bytes'
+import { formatBytes, sha256Hex } from '../lib/bytes'
+import { resolveOwnership, stampFileOwner } from '../lib/fileOwnership'
 import { loadConfig } from '../lib/config'
 import { type Manifest } from '../lib/manifest'
 import { retrieveFile } from '../lib/retrieve'
@@ -75,6 +76,8 @@ function ConnectedFilesPage() {
   const { active: activeSigner, evm: evmSigner } = useSigner()
   const [verifiedRoots, setVerifiedRoots] = useState<Set<string>>(new Set())
   const [manifests, setManifests] = useState<Manifest[]>([])
+  // local files with no ownership info: excluded from the table, shown collapsed for manual claiming
+  const [unownedManifests, setUnownedManifests] = useState<Manifest[]>([])
   const [tasks, setTasks] = useState<TaskRecord[]>([])
   const [registryRecords, setRegistryRecords] = useState<RegistryRecord[]>([])
   // do not render the guide slot until the local cache read has settled
@@ -110,10 +113,28 @@ function ConnectedFilesPage() {
 
   const refresh = useCallback(async () => {
     const [ms, ts, rs] = await Promise.all([listManifests(), listTasks(), listRegistryRecords()])
-    setManifests(ms.sort((a, b) => b.submittedAt.localeCompare(a.submittedAt)))
+    // ownership filter: the table / guide / resume flow only consume the
+    // connected account's files; files with no ownership info go to the
+    // collapsed "unowned" group for manual claiming; other accounts' files
+    // are not rendered (this closes the historically unscoped file list).
+    const mine: Manifest[] = []
+    const unowned: Manifest[] = []
+    for (const m of ms) {
+      const verdict = evmSigner
+        ? await resolveOwnership(m, {
+            myAddress: evmSigner.address,
+            mySubstrateAddress: activeSigner?.address ?? null,
+            records: rs.filter((r) => r.rootCid === m.rootCid),
+          })
+        : 'unknown'
+      if (verdict === 'mine') mine.push(m)
+      else if (verdict === 'unknown') unowned.push(m)
+    }
+    setManifests(mine.sort((a, b) => b.submittedAt.localeCompare(a.submittedAt)))
+    setUnownedManifests(unowned.sort((a, b) => b.submittedAt.localeCompare(a.submittedAt)))
     setTasks(ts.filter((x) => x.kind === 'archive-watch')) // publish tasks are tracked by pendingPublish
     setRegistryRecords(rs)
-  }, [])
+  }, [evmSigner, activeSigner])
 
   // three-state share badges (derived on-chain: Published event / listing;
   // failures render as unshared)
@@ -143,6 +164,13 @@ function ConnectedFilesPage() {
       // persisted in the same transaction that deletes the task (F03)
       const manifest = await verifyPublishTask(api, record)
       if (manifest) {
+        // ownership stamp: the task table is not account-scoped — stamp the
+        // current EVM account only when the task's uploader matches the
+        // connected consensus signer (verifying someone else's task must not
+        // claim ownership)
+        if (evmSigner && manifest.uploader?.address === activeSigner?.address) {
+          await stampFileOwner(manifest.rootCid, evmSigner.address)
+        }
         if (record.persistManifest === false && record.file.name.endsWith('.manifest.json')) {
           const rootCid = record.file.name.slice(0, -'.manifest.json'.length)
           await putManifestPublishMeta(rootCid, { manifestCid: manifest.rootCid, height: manifest.txs[0].height, txHash: manifest.txs[0].txHash })
@@ -276,7 +304,24 @@ function ConnectedFilesPage() {
     }
   }
 
-  const syncedRootCids = new Set(registryRecords.map((r) => r.rootCid))
+  // the saved status only counts the connected account's registrations — the
+  // same file registered by another account is still unfinished for this one
+  const syncedRootCids = new Set(
+    registryRecords.filter((r) => r.evmAddress.toLowerCase() === evmSigner?.address.toLowerCase()).map((r) => r.rootCid),
+  )
+
+  // claim an unowned file (explicit attribution to the connected account);
+  // refresh re-partitions it into the table
+  const claimUnowned = async (manifest: Manifest) => {
+    if (!evmSigner) return
+    await stampFileOwner(manifest.rootCid, evmSigner.address)
+    await refresh()
+  }
+  const claimAllUnowned = async () => {
+    if (!evmSigner) return
+    for (const m of unownedManifests) await stampFileOwner(m.rootCid, evmSigner.address)
+    await refresh()
+  }
 
   const syncToRegistry = async (manifest: Manifest, fromResume = false) => {
     if (resuming.current) return
@@ -392,13 +437,30 @@ function ConnectedFilesPage() {
       // lazy consensus connect: an empty-directory verdict must not require it
       // (the guide decision costs a single EVM view call)
       let api: Awaited<ReturnType<typeof connect>> | null = null
+      // the known-set only contains this account's files: other/unowned
+      // manifests do not participate in the skip; an unowned file sharing a
+      // CID with one of this account's directory entries self-heals (one
+      // redundant scan → overwritten + stamped)
+      const [allMs, allRs] = await Promise.all([listManifests(), listRegistryRecords()])
+      const ownManifests: Manifest[] = []
+      for (const m of allMs) {
+        const verdict = await resolveOwnership(m, {
+          myAddress: evmSigner.address,
+          mySubstrateAddress: activeSigner?.address ?? null,
+          records: allRs.filter((r) => r.rootCid === m.rootCid),
+        })
+        if (verdict === 'mine') ownManifests.push(m)
+      }
       const result: DirectorySyncResult = await syncDirectoryFromRegistry(
         {
           address: evmSigner.address,
           fetchEntries,
-          listManifests,
+          listManifests: async () => ownManifests,
           listRegistryRecords,
-          putManifest,
+          putManifest: async (manifest) => {
+            await putManifest(manifest)
+            await stampFileOwner(manifest.rootCid, evmSigner.address) // a recovered entry belongs to the connected account
+          },
           putRegistryRecord,
           recover: async (entry) => {
             api ??= await connect()
@@ -559,6 +621,34 @@ function ConnectedFilesPage() {
           onDelete={(m) => void removeManifest(m)}
           onShare={(m) => setSharePanelRoot((cur) => (cur === m.rootCid ? null : m.rootCid))}
         />
+        {/* unowned group: files with unclear ownership (older local uploads or
+            a previously connected account) — excluded from the table and the
+            guide counters; they count as this account's files only after an
+            explicit claim */}
+        {unownedManifests.length > 0 && (
+          <details className="unowned-files" data-testid="unowned-files">
+            <summary>{t('files.unownedTitle', [unownedManifests.length])}</summary>
+            <p className="muted small-text">{t('files.unownedHelp')}</p>
+            <table className="files-table">
+              <tbody>
+                {unownedManifests.map((m) => (
+                  <tr key={m.rootCid}>
+                    <td>
+                      <div className="file-name">{m.encryption ? '🔒 ' : ''}{m.file.name}</div>
+                    </td>
+                    <td>{formatBytes(m.file.size)}</td>
+                    <td>
+                      <button className="btn small" onClick={() => void claimUnowned(m)}>{t('files.claim')}</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="row">
+              <button className="btn small" onClick={() => void claimAllUnowned()}>{t('files.claimAll')}</button>
+            </div>
+          </details>
+        )}
         <div className="privacy-note">
           {t('files.privacyRegistry')}
           <Hint>{t('files.hintRegistry')}</Hint>
@@ -576,7 +666,13 @@ function ConnectedFilesPage() {
             <SharePanel
               initialShareInfo={shareInfos.get(manifest.rootCid)}
               manifest={manifest}
-              registryRecord={registryRecords.find((r) => r.rootCid === sharePanelRoot) ?? null}
+              registryRecord={
+                // location info prefers this account's registration; a claimed
+                // file falls back to any registration
+                registryRecords.find((r) => r.rootCid === sharePanelRoot && r.evmAddress.toLowerCase() === evmSigner?.address.toLowerCase())
+                  ?? registryRecords.find((r) => r.rootCid === sharePanelRoot)
+                  ?? null
+              }
               getPassphrase={openPassphrasePrompt}
               onNotice={setNotice}
               onChanged={() => {

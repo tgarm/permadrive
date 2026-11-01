@@ -327,6 +327,31 @@ export interface SalesOrderRow {
   entry: RegistryEntry | null
 }
 
+// ---- Global buyer-count aggregation (the Discover "Hot" ranking) ----
+// Purchased events grouped by fileKey (= keccak256(manifestCid)) into unique
+// buyer counts. Full scan (salesDeployBlock→head) with a 60s in-memory cache.
+// Dust-price postings of public files also count (including the publisher
+// themselves) — good enough as a ranking signal; no billing path depends on
+// this data.
+
+const BUYERS_TTL_MS = 60_000
+let buyersCache: { at: number; byFileKey: Map<string, Set<string>> } | null = null
+
+export async function fetchBuyerCountsByFileKey(): Promise<Map<string, Set<string>>> {
+  assertSalesActive()
+  if (buyersCache && Date.now() - buyersCache.at < BUYERS_TTL_MS) return buyersCache.byFileKey
+  const deployBlock = loadConfig().salesDeployBlock || 1
+  const latest = Number(await registryPublicClient().getBlockNumber())
+  const byFileKey = new Map<string, Set<string>>()
+  for (const stub of await scanPurchasedSales({}, deployBlock, latest)) {
+    const set = byFileKey.get(stub.fileKey) ?? new Set<string>()
+    set.add(stub.buyer)
+    byFileKey.set(stub.fileKey, set)
+  }
+  buyersCache = { at: Date.now(), byFileKey }
+  return byFileKey
+}
+
 /** Buyer's purchase history (newest first; order snapshots, never re-checked against the current listing) */
 export async function fetchMyOrdersSales(me: string): Promise<SalesOrderRow[]> {
   const stubs = await mergedStubs('buyer', { buyer: me }, loadConfig().salesDeployBlock)

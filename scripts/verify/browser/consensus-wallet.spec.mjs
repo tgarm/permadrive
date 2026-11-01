@@ -115,6 +115,8 @@ test('fee estimates reuse wallet balance snapshots without fetching balances aga
     const store = await import('/src/lib/store.ts')
     await store.putManifest({version:2,network:'mainnet',rootCid:'fee-fixture',file:{name:'estimate.txt',size:1,sha256:'00'.repeat(32),mimeType:'text/plain'},encryption:null,nodes:[],txs:[],compression:null,uploader:{address:''},submittedAt:new Date().toISOString(),recovery:{manifestCid:'fee-recovery'}})
     await store.putMeta('manifestPublish:fee-fixture', {manifestCid:'fee-recovery',height:1,txHash:'0x01'})
+    // ownership stamp: the file selector is account-scoped — unstamped files go to the unowned group
+    await store.putMeta('fileOwner:fee-fixture', '0x' + '11'.repeat(20))
   })
   await page.reload()
   await page.getByRole('button', {name:'Test EVM',exact:true}).click()

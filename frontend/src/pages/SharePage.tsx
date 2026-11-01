@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useChain } from '../chain-context'
 import { useSigner } from '../signer-context'
-import { formatAi3, formatBytes, fromHex, sha256Hex } from '../lib/bytes'
+import { formatAi3, formatBytes, fromHex } from '../lib/bytes'
 import { ChainTag } from '../components/ChainTag'
 import {
   fetchPublishedByKey,
@@ -46,16 +46,14 @@ import { fetchEntries, type RegistryEntry } from '../lib/registry'
 import { getManifest, listMessages, listRegistryRecords } from '../lib/store'
 import { retrieveFile } from '../lib/retrieve'
 import { recoverManifestFromHint } from '../lib/manifestRecover'
-import { aesGcmDecrypt } from '../lib/vaultCrypto'
+import { decryptAndSavePublic } from '../lib/publicDownload'
 import { unwrapManifestKey } from '../lib/keyUnwrap'
 import { autoEvmChain } from '../lib/evm'
 import { saveBlob } from '../lib/download'
-import type { ApiPromise } from '@polkadot/api'
 import type { Manifest } from '../lib/manifest'
 import type { ShareLinkParams } from '../lib/shareLink'
 import type { EvmSigner } from '../lib/wallet/types'
 import { useI18n } from '../i18n'
-import { t } from '../i18n/core.ts'
 
 const short = (a: string): string => (a ? `${a.slice(0, 8)}…${a.slice(-6)}` : '—')
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000'
@@ -69,36 +67,9 @@ type LandingPhase =
   | { kind: 'ready'; manifest: Manifest; entry: RegistryEntry | null; event: PublishedEvent | null; keySource: 'link' | 'event' | null }
   | { kind: 'failed'; message: string }
 
-/** Decrypt + integrity gate (mismatches block saving; exporting unverified
- *  bytes needs an explicit confirm). When an event exists, comparing the
- *  plaintext digest/size is mandatory — GCM authentication does not mean the
- *  content matches the public claim. */
-async function decryptAndSave(
-  api: ApiPromise,
-  manifest: Manifest,
-  keyBytes: Uint8Array,
-  say: (s: string) => void,
-  event: PublishedEvent | null,
-): Promise<void> {
-  if (!manifest.encryption) throw new Error(t('errors.manifestNotEncrypted'))
-  const result = await retrieveFile(api, manifest)
-  if (!result.sha256Match) throw new Error(t('files.cipherIntegrityFail'))
-  say(t('share.decryptingPublic'))
-  const plain = await aesGcmDecrypt(keyBytes, fromHex(manifest.encryption.iv), result.bytes)
-  const plainSha = await sha256Hex(plain)
-  if (plainSha !== manifest.file.sha256 || plain.length !== manifest.file.size) {
-    if (window.confirm(t('share.integrityBlockExport', [plainSha.slice(0, 16)]))) saveBlob(plain, manifest.file.name, manifest.file.mimeType)
-    return
-  }
-  if (event) {
-    const evSha = event.plainSha256.replace(/^0x/, '').toLowerCase()
-    if (evSha !== plainSha || Number(event.plainSize) !== plain.length) {
-      if (!window.confirm(t('share.eventMismatchExport'))) return
-    }
-  }
-  saveBlob(plain, manifest.file.name, manifest.file.mimeType)
-  say(t('share.decryptedOk', [manifest.file.name, plainSha.slice(0, 16)]))
-}
+// the decrypt + integrity-gate pipeline was extracted to lib/publicDownload
+// (the Share deep link and the Discover download share one retrieve → decrypt
+// → plaintext verification → D11 declaration comparison → save flow)
 
 /** Strict pdgrant v3 matching: message chain/contract domain plus the grant's
  *  chainId/sales/orderId/buyer/seller/provider all checked against the order
@@ -227,7 +198,7 @@ function ShareLanding({ params }: { params: ShareLinkParams }) {
       const keyHex0 = params.key ?? phase.event?.key ?? null
       if (!keyHex0) throw new Error(t('share.noKeyAvailable'))
       const api = await connect()
-      await decryptAndSave(api, phase.manifest, fromHex(keyHex0), say, phase.event)
+      await decryptAndSavePublic(api, phase.manifest, fromHex(keyHex0), say, phase.event)
     } catch (e) {
       say(`✗ ${(e as Error).message}`)
     } finally {
@@ -420,7 +391,7 @@ function MyPurchases() {
         const localManifest = rec ? await getManifest(rec.rootCid) : undefined
         if (localManifest?.encryption) {
           const k = await unwrapManifestKey(evm, localManifest, () => Promise.resolve(null))
-          await decryptAndSave(await connect(), localManifest, k, say, null)
+          await decryptAndSavePublic(await connect(), localManifest, k, say, null)
           return
         }
         say(t('sales.waitingDelivery'))
@@ -428,7 +399,7 @@ function MyPurchases() {
       }
       const api = await connect()
       const manifest = await recoverManifestFromHint(api, row.entry.manifestCid, Number(row.entry.height))
-      await decryptAndSave(api, manifest, keyBytes, say, null)
+      await decryptAndSavePublic(api, manifest, keyBytes, say, null)
     } catch (e) {
       say(`✗ ${(e as Error).message}`)
     } finally {

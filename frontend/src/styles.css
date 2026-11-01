@@ -998,3 +998,6 @@ textarea:focus {
 .file-details summary { cursor: pointer; padding: 5px; font-size: 13px; }
 .file-details dd { margin-left: 0; overflow-wrap: anywhere; font-size: 12px; }
 .file-details dt { color: var(--muted); margin-top: 8px; font-size: 12px; }
+/* unowned group: collapsed list with manual claiming */
+.unowned-files { margin-top: 12px; }
+.unowned-files summary { cursor: pointer; padding: 5px; font-size: 13px; color: var(--muted); }

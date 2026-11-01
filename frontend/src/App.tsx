@@ -6,6 +6,7 @@ import { LanguageSelect } from './components/LanguageSelect'
 import { WalletBar } from './components/WalletBar'
 import { ThemeToggle } from './components/ThemeToggle'
 import { FilesPage } from './pages/FilesPage'
+import { DiscoverPage } from './pages/DiscoverPage'
 import { SharePage } from './pages/SharePage'
 import { MessagesPage } from './pages/MessagesPage'
 import { NotesPage } from './pages/NotesPage'
@@ -15,7 +16,7 @@ import { SettingsPage } from './pages/SettingsPage'
 import { parseShareHash } from './lib/shareLink'
 import { useI18n } from './i18n'
 
-type Tab = 'files' | 'share' | 'messages' | 'notes' | 'vault' | 'about' | 'settings'
+type Tab = 'files' | 'discover' | 'share' | 'messages' | 'notes' | 'vault' | 'about' | 'settings'
 
 function Shell() {
   // Deep links: parse location.hash once on mount; a `#/s?...` hash makes
@@ -54,6 +55,9 @@ function Shell() {
         <button className={tab === 'files' ? 'tab active' : 'tab'} onClick={() => setTab('files')}>
           {t('app.nav.files')}
         </button>
+        <button className={tab === 'discover' ? 'tab active' : 'tab'} onClick={() => setTab('discover')}>
+          {t('app.nav.discover')}
+        </button>
         <button className={tab === 'share' ? 'tab active' : 'tab'} onClick={() => setTab('share')}>
           {t('app.nav.share')}
         </button>
@@ -76,6 +80,8 @@ function Shell() {
       <main>
         {tab === 'files' ? (
           <FilesPage />
+        ) : tab === 'discover' ? (
+          <DiscoverPage />
         ) : tab === 'share' ? (
           <SharePage deepLink={deepLink} parseError={deepLinkError} />
         ) : tab === 'messages' ? (

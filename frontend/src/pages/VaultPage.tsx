@@ -21,6 +21,7 @@ import { recoverManifestFromHint } from '../lib/manifestRecover'
 import { retrieveFile } from '../lib/retrieve'
 import { fetchEntries, quoteRegisterFee, registerFile } from '../lib/registry'
 import { getVault, putManifest, putVault, type VaultRecord, type VaultVersionRecord } from '../lib/store'
+import { stampFileOwner } from '../lib/fileOwnership'
 import { openPayload, unwrapWithPassphrase, type KeystoreFileV1 } from '../lib/vaultCrypto'
 import {
   createVaultEnvelope,
@@ -318,6 +319,7 @@ export function VaultPage() {
         setSession((cur) => (cur ? { ...cur, stage: 'publishing', detail: detail ? `${text} ${detail}` : text } : cur))
       })
       await putManifest(manifest)
+      await stampFileOwner(manifest.rootCid, evm.address) // ownership stamp
       setSession((cur) => (cur ? { ...cur, detail: t('stage.manifestPublishing') } : cur))
       const publication = await publishManifestToChain(api, manifest, active, (_stage, detail) =>
         setSession((cur) => (cur ? { ...cur, stage: 'publishing', detail } : cur)),
@@ -374,6 +376,7 @@ export function VaultPage() {
       setBusy(t('vault.fetchingEnvelope', [latest.height]))
       const manifest = await recoverManifestFromHint(api, latest.manifestCid, latest.height)
       await putManifest(manifest)
+      await stampFileOwner(manifest.rootCid, evm.address) // ownership stamp
       const result = await retrieveFile(api, manifest)
       const envelope = parseEnvelope(JSON.parse(new TextDecoder().decode(result.bytes)))
       if (envelope.address !== evm.address.toLowerCase()) throw new Error(t('errors.envelopeOwnerMismatch'))

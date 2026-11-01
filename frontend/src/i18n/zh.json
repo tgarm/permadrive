@@ -4,6 +4,7 @@
     "tagline": "Autonomys 永久存储 · 无后端 · 无账户",
     "nav": {
       "files": "我的文件",
+      "discover": "发现",
       "share": "分享",
       "notes": "笔记",
       "vault": "密码库",
@@ -117,6 +118,10 @@
     "myFiles": "我的文件",
     "importManifest": "导入 manifest",
     "refresh": "刷新",
+    "unownedTitle": "未归属的本地文件（{0}）",
+    "unownedHelp": "这些文件缺少归属信息（旧版本地上传或换过连接账户），不会出现在上方列表；确认属于你时再认领。",
+    "claim": "认领",
+    "claimAll": "全部认领",
     "empty": "还没有文件。选择文件后，系统会自动加密并引导你完成保存。",
     "thFile": "文件",
     "thDsn": "DSN 归档",
@@ -579,6 +584,34 @@
     "badParamBadHeight": "分享链接的 h（块高提示）超出安全范围。",
     "badParamBadOwner": "分享链接的 o 不是合法的 EVM 地址。",
     "badParamBadKey": "分享链接的 k 不是 64 位 hex 密钥。"
+  },
+  "discover": {
+    "title": "发现",
+    "subtitle": "全网公开分享的文件（PublicPublisher Published 事件，密钥随事件公开；下载前一律完整性校验）",
+    "refresh": "刷新",
+    "loading": "正在扫描公开文件…",
+    "followingCount": "已关注 {0} 位发布者",
+    "feed": {
+      "latest": "最新公开",
+      "hot": "最热",
+      "followed": "关注的发布者",
+      "saved": "我的收藏"
+    },
+    "empty": {
+      "latest": "还没有公开文件",
+      "hot": "暂无热度数据",
+      "followed": "没有已关注发布者的公开文件 —— 在列表行关注发布者后，他们的公开文件会出现在这里",
+      "saved": "还没有收藏 —— 浏览时点「收藏」把公开文件存到这里（含定位与密钥，可反复下载）"
+    },
+    "follow": "关注",
+    "unfollow": "取关",
+    "bookmark": "收藏",
+    "unbookmark": "取消收藏",
+    "downloading": "取回中…",
+    "blockHeight": "公开于",
+    "publisher": "发布者",
+    "buyers": "买家数",
+    "footer": "公开文件的密钥随 Published 事件全网公开，任何人可下载；收藏与关注仅存于本站本地数据，换浏览器不随行。"
   },
   "onboarding": {
     "title": "保存你的第一个文件",

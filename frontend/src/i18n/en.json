@@ -4,6 +4,7 @@
     "tagline": "Permanent storage on Autonomys · No backend · No accounts",
     "nav": {
       "files": "My Files",
+      "discover": "Discover",
       "share": "Share",
       "notes": "Notes",
       "vault": "Vault",
@@ -117,6 +118,10 @@
     "myFiles": "My Files",
     "importManifest": "Import manifest",
     "refresh": "Refresh",
+    "unownedTitle": "Unowned local files ({0})",
+    "unownedHelp": "These files carry no ownership info (uploaded by an older version, or under a different account) and are not listed above; claim only the ones that are yours.",
+    "claim": "Claim",
+    "claimAll": "Claim all",
     "empty": "No files yet. Select a file; PermaDrive will encrypt it automatically and guide you through saving it.",
     "thFile": "File",
     "thDsn": "DSN archive",
@@ -579,6 +584,34 @@
     "badParamBadHeight": "The share link's h (block height hint) is out of safe range.",
     "badParamBadOwner": "The share link's o is not a valid EVM address.",
     "badParamBadKey": "The share link's k is not a 64-hex-digit key."
+  },
+  "discover": {
+    "title": "Discover",
+    "subtitle": "Publicly shared files across the network (PublicPublisher Published events; keys are public with the event and every download is integrity-checked)",
+    "refresh": "Refresh",
+    "loading": "Scanning public files…",
+    "followingCount": "Following {0} publishers",
+    "feed": {
+      "latest": "Latest",
+      "hot": "Hot",
+      "followed": "Followed publishers",
+      "saved": "Saved"
+    },
+    "empty": {
+      "latest": "No public files yet",
+      "hot": "No popularity data yet",
+      "followed": "No public files from followed publishers yet — follow a publisher from any row and their public files will appear here",
+      "saved": "Nothing saved yet — use \"Save\" on any row to keep a public file here (location and key stored for repeat downloads)"
+    },
+    "follow": "Follow",
+    "unfollow": "Unfollow",
+    "bookmark": "Save",
+    "unbookmark": "Remove",
+    "downloading": "Retrieving…",
+    "blockHeight": "Published at",
+    "publisher": "Publisher",
+    "buyers": "Buyers",
+    "footer": "Public file keys are disclosed with the Published event — anyone can download them. Bookmarks and follows live in this site's local data only."
   },
   "onboarding": {
     "title": "Save your first file",

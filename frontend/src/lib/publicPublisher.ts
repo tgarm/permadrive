@@ -97,8 +97,44 @@ const PUBLISHED_TTL_MS = 60_000
 const publishedCache = new Map<string, { at: number; value: PublishedEvent | null }>()
 
 export function invalidatePublishedCache(manifestCid?: string): void {
+  allPublishedCache.at = 0 // invalidate the full list too (Discover rescans on next visit)
   if (manifestCid) publishedCache.delete(manifestCid)
   else publishedCache.clear()
+}
+
+/** Segmented Published log scan (≤10k blocks per segment; always filtered by
+ *  the publisher address, D10). Omitting args.fileKey scans everything (the
+ *  Discover data source). */
+async function scanPublishedLogs(args: { fileKey?: string }): Promise<PublishedEvent[]> {
+  const client = registryPublicClient()
+  const from = Math.max(1, loadConfig().publicPublisherDeployBlock || 1)
+  const latest = Number(await client.getBlockNumber())
+  const out: PublishedEvent[] = []
+  for (let start = from; start <= latest; start += 10_000) {
+    const logs = await client.getLogs({
+      address: publicPublisherAddress()!,
+      event: PUBLISHED_EVENT,
+      args,
+      fromBlock: BigInt(start),
+      toBlock: BigInt(Math.min(start + 9_999, latest)),
+    })
+    for (const log of logs) {
+      const a = log.args as PublishedArgs
+      if (a?.fileKey == null || !a.seller || !a.manifestCid || !a.key || a.plainSha256 == null) continue
+      out.push({
+        fileKey: a.fileKey,
+        seller: a.seller.toLowerCase(),
+        manifestCid: a.manifestCid,
+        key: a.key,
+        plainSha256: a.plainSha256,
+        plainSize: a.plainSize ?? 0n,
+        manifestHeightHint: a.manifestHeightHint ?? 0n,
+        txHash: log.transactionHash ?? '',
+        blockNumber: Number(log.blockNumber),
+      })
+    }
+  }
+  return out
 }
 
 /** Query the Published event for one file (fileKey topic, always filtered by
@@ -110,37 +146,23 @@ export async function fetchPublishedByKey(manifestCid: string): Promise<Publishe
   if (!publicPublisherActive() || !salesActive()) return null
   const hit = publishedCache.get(manifestCid)
   if (hit && Date.now() - hit.at < PUBLISHED_TTL_MS) return hit.value
-  const fileKey = fileKeyOf(manifestCid)
-  const client = registryPublicClient()
-  const from = Math.max(1, loadConfig().publicPublisherDeployBlock || 1)
-  const latest = Number(await client.getBlockNumber())
-  let found: PublishedEvent | null = null
-  for (let start = from; start <= latest; start += 10_000) {
-    const logs = await client.getLogs({
-      address: publicPublisherAddress()!,
-      event: PUBLISHED_EVENT,
-      args: { fileKey },
-      fromBlock: BigInt(start),
-      toBlock: BigInt(Math.min(start + 9_999, latest)),
-    })
-    for (const log of logs) {
-      const a = log.args as PublishedArgs
-      if (a?.fileKey == null || !a.seller || !a.manifestCid || !a.key || a.plainSha256 == null) continue
-      found = {
-        fileKey: a.fileKey,
-        seller: a.seller.toLowerCase(),
-        manifestCid: a.manifestCid,
-        key: a.key,
-        plainSha256: a.plainSha256,
-        plainSize: a.plainSize ?? 0n,
-        manifestHeightHint: a.manifestHeightHint ?? 0n,
-        txHash: log.transactionHash ?? '',
-        blockNumber: Number(log.blockNumber),
-      }
-    }
-  }
+  const logs = await scanPublishedLogs({ fileKey: fileKeyOf(manifestCid) })
+  const found = logs.length > 0 ? logs[logs.length - 1] : null
   publishedCache.set(manifestCid, { at: Date.now(), value: found })
   return found
+}
+
+// Full Published log list (the Discover data source): the same segmented scan
+// with no topic filter, TTL-cached. Failures propagate (the UI shows a check
+// failure instead of faking "no public files").
+const allPublishedCache: { at: number; value: PublishedEvent[] } = { at: 0, value: [] }
+
+export async function listPublishedEvents(): Promise<PublishedEvent[]> {
+  if (!publicPublisherActive() || !salesActive()) return []
+  if (Date.now() - allPublishedCache.at < PUBLISHED_TTL_MS) return allPublishedCache.value
+  allPublishedCache.value = await scanPublishedLogs({})
+  allPublishedCache.at = Date.now()
+  return allPublishedCache.value
 }
 
 // ---- Public write ----

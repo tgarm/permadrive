@@ -118,9 +118,10 @@ test('invalid share links stay on a visible error page without wallet prompts', 
 test('opening Share and Messages does not request a public key or send a transaction', async ({ page }) => {
   await page.goto('/')
   const nav = page.locator('nav.tabs button')
-  await nav.nth(1).click()
-  await expect(page.getByTestId('first-use-guide')).toHaveCount(0)
+  // Discover sits right after Files: Share is now index 2, Messages index 3
   await nav.nth(2).click()
+  await expect(page.getByTestId('first-use-guide')).toHaveCount(0)
+  await nav.nth(3).click()
   await page.waitForTimeout(750)
   await noWalletPrompts(page)
 })
@@ -201,12 +202,42 @@ test('fee estimate is hidden without a wallet and a selected file', async ({ pag
   await noWalletPrompts(page)
 })
 
+// ownership scoping: the file table lists only the connected account's files;
+// another account's files are not rendered at all; files with no ownership
+// info go to the claimable unowned group.
+test('files list is scoped to the connected account with a claimable unowned group', async ({ page }) => {
+  await connectedDirectory(page)
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const store = await import('/src/lib/store.ts')
+    const mk = (rootCid, name, uploader) => ({ version: 2, network: 'mainnet', rootCid, file: {name, size: 1, sha256: '00'.repeat(32), mimeType: 'text/plain'}, encryption: null, compression: null, nodes: [], txs: [], uploader: {address: uploader}, submittedAt: new Date().toISOString() })
+    await store.putManifest(mk('scope-mine', 'mine.txt', ''))
+    await store.putManifest(mk('scope-other', 'other.txt', ''))
+    await store.putManifest(mk('scope-unclaimed', 'unclaimed.txt', ''))
+    await store.putMeta('fileOwner:scope-mine', '0x' + '11'.repeat(20))
+    await store.putMeta('fileOwner:scope-other', '0x' + '22'.repeat(20))
+  })
+  await page.reload()
+  await expect(page.locator('.files-table tr').filter({hasText: 'mine.txt'})).toBeVisible()
+  await expect(page.locator('.files-table tr').filter({hasText: 'other.txt'})).toHaveCount(0)
+  const unowned = page.getByTestId('unowned-files')
+  await expect(unowned).toBeVisible()
+  await unowned.locator('summary').click() // collapsed details — expand before interacting
+  await expect(unowned.locator('tr').filter({hasText: 'unclaimed.txt'})).toBeVisible()
+  await unowned.getByRole('button', {name: 'Claim', exact: true}).click()
+  await expect(page.locator('.files-table tr').filter({hasText: 'unclaimed.txt'})).toBeVisible()
+  await expect(page.getByTestId('unowned-files')).toHaveCount(0)
+  await noWalletPrompts(page)
+})
+
 test('unfinished directory reminder survives reload without resubmitting an upload', async ({ page }) => {
   await connectedDirectory(page)
   await page.goto('/')
   await page.evaluate(async () => {
     const store = await import('/src/lib/store.ts')
     await store.putManifest({ version: 2, network: 'mainnet', rootCid: 'fixture-unfinished', file: {name:'pending-backup.txt',size:1,sha256:'00'.repeat(32),mimeType:'text/plain'}, encryption:null, nodes:[], txs:[], compression:null,uploader:{address:''}, submittedAt:new Date().toISOString() })
+    // ownership stamp: with the account-scoped list, unstamped files land in the unowned group instead of the table
+    await store.putMeta('fileOwner:fixture-unfinished', '0x' + '11'.repeat(20))
   })
   await page.reload()
   const reminder = page.getByTestId('unfinished-storage')

@@ -18,6 +18,7 @@ import { recoverManifestFromHint } from '../lib/manifestRecover'
 import { retrieveFile } from '../lib/retrieve'
 import { fetchEntries, quoteRegisterFee, registerFile } from '../lib/registry'
 import { deleteNote, getManifest, listNotes, putManifest, putNote, type NoteRecord, type NoteVersionRecord } from '../lib/store'
+import { stampFileOwner } from '../lib/fileOwnership'
 import { nodeCount, useI18n, versionCount } from '../i18n'
 
 interface SaveSession {
@@ -175,6 +176,7 @@ export function NotesPage() {
         setSession((cur) => (cur ? { ...cur, stage: 'publishing', detail: detail ? `${text} ${detail}` : text } : cur))
       })
       await putManifest(manifest)
+      await stampFileOwner(manifest.rootCid, evm.address) // ownership stamp
       setSession((cur) => (cur ? { ...cur, detail: t('stage.manifestPublishing') } : cur))
       // 2) manifest re-published into the DSN (registry entry locator, same path as "My files" sync)
       const publication = await publishManifestToChain(api, manifest, active, (_stage, detail) =>
@@ -271,6 +273,7 @@ export function NotesPage() {
           if (!ref) continue
           const manifest = await recoverManifestFromHint(api, entry.manifestCid, entry.height)
           await putManifest(manifest)
+          await stampFileOwner(manifest.rootCid, evm.address) // ownership stamp
           versions.push({
             rootCid: manifest.rootCid,
             manifestCid: entry.manifestCid,
