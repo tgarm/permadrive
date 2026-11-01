@@ -30,6 +30,7 @@ import { type Manifest } from '../lib/manifest'
 import { retrieveFile } from '../lib/retrieve'
 import { publishManifestToChain } from '../lib/manifestPublish'
 import { recoverManifestFromHint } from '../lib/manifestRecover'
+import { syncDirectoryFromRegistry, type DirectorySyncResult } from '../lib/directorySync'
 import { fetchEntries, getEvmBalance, quoteRegisterFee, registryPublicClient, registerFile } from '../lib/registry'
 import { IndexerClient } from '../lib/indexer'
 import { signEvmMessage } from '../lib/vault'
@@ -75,6 +76,14 @@ function ConnectedFilesPage() {
   const [manifests, setManifests] = useState<Manifest[]>([])
   const [tasks, setTasks] = useState<TaskRecord[]>([])
   const [registryRecords, setRegistryRecords] = useState<RegistryRecord[]>([])
+  // do not render the guide slot until the local cache read has settled
+  // (prevents the guide from flashing for users whose files are already local)
+  const [loaded, setLoaded] = useState(false)
+  // directory reconciliation state: pending=true means something is still
+  // unsettled (checking / failed / entries that failed to recover) — while
+  // unsettled the page shows a waiting card and NEVER the first-use guide
+  // (an unresolved check does not mean the account is new)
+  const [dirCheck, setDirCheck] = useState<{ state: 'checking' | 'done'; pending: boolean }>({ state: 'checking', pending: true })
   const [rowBusy, setRowBusy] = useState<RowBusy>({})
   const [syncing, setSyncing] = useState<Set<string>>(new Set()) // rootCids with a sync in flight (explicit state, never matched by copy)
   const [notice, setNotice] = useState<string | null>(null)
@@ -204,16 +213,18 @@ function ConnectedFilesPage() {
   )
 
   useEffect(() => {
-    void refresh().then(async () => {
-      // restart unfinished archive watches (they survive reload/close)
-      const [ts, ms] = [await listTasks(), await listManifests()]
-      for (const tk of ts.filter((x) => x.kind === 'archive-watch' && !x.done)) {
-        const manifest = ms.find((m) => m.rootCid === tk.id) ?? (await getManifest(tk.id))
-        if (manifest) void watchArchive(manifest)
-        else await deleteTask(tk.id)
-      }
-      await refreshPendingPublish()
-    })
+    void refresh()
+      .then(async () => {
+        // restart unfinished archive watches (they survive reload/close)
+        const [ts, ms] = [await listTasks(), await listManifests()]
+        for (const tk of ts.filter((x) => x.kind === 'archive-watch' && !x.done)) {
+          const manifest = ms.find((m) => m.rootCid === tk.id) ?? (await getManifest(tk.id))
+          if (manifest) void watchArchive(manifest)
+          else await deleteTask(tk.id)
+        }
+        await refreshPendingPublish()
+      })
+      .finally(() => setLoaded(true))
   }, [refresh, watchArchive, refreshPendingPublish])
 
   // Passphrase fallback dialog for download decryption: promise-based, the decrypt flow awaits it; cancel resolves null
@@ -363,59 +374,80 @@ function ConnectedFilesPage() {
     }
   }
 
-  // Recover = read registry entries → block scan to restore manifests → store (the cross-device main path)
-  const recoverFromRegistry = async () => {
-    setNotice(null)
-    if (!evmSigner) {
-      setRecoverState(t('files.recoverNeedEvm'))
-      return
-    }
+  // Directory reconciliation = read registry entries → incremental block scan to
+  // restore manifests → store (the cross-device main path). Runs once
+  // automatically on connect (auto=true: only entries not yet reconciled, never
+  // resurrects locally deleted files); the manual button (auto=false) keeps the
+  // full-rescan semantics (an explicit intent is what brings deleted files back).
+  // The whole flow is read-only chain access + local writes, no wallet prompts.
+  const runDirectorySync = async (auto = false) => {
+    if (!evmSigner || recoverBusy) return
     setRecoverBusy(true)
+    setDirCheck({ state: 'checking', pending: true })
+    setRecoverState(auto ? null : t('files.readingRegistry'))
     try {
-      setRecoverState(t('files.readingRegistry'))
-      const entries = await fetchEntries(evmSigner.address)
-      if (entries.length === 0) {
-        setRecoverState(t('files.registryEmpty', [evmSigner.address.slice(0, 10) + '…']))
+      // lazy consensus connect: an empty-directory verdict must not require it
+      // (the guide decision costs a single EVM view call)
+      let api: Awaited<ReturnType<typeof connect>> | null = null
+      const result: DirectorySyncResult = await syncDirectoryFromRegistry(
+        {
+          address: evmSigner.address,
+          rescanAll: !auto,
+          fetchEntries,
+          listManifests,
+          listRegistryRecords,
+          putManifest,
+          putRegistryRecord,
+          recover: async (entry) => {
+            api ??= await connect()
+            return recoverManifestFromHint(api, entry.manifestCid, entry.height)
+          },
+        },
+        ({ index, total, entry }) => {
+          setRecoverState(t('files.recoveringItem', [index + 1, total, entry.name, entry.height]))
+        },
+      )
+      setDirCheck({ state: 'done', pending: !result.empty && result.failed.length > 0 })
+      await refresh()
+      // summary: in auto mode an empty directory / nothing new stays silent (the
+      // waiting card or the file table is the feedback); the manual mode keeps
+      // the original copy. Failed entries are listed by name; a retry only
+      // re-processes them.
+      if (result.empty) {
+        setRecoverState(auto ? null : t('files.registryEmpty', [evmSigner.address.slice(0, 10) + '…']))
         return
       }
-      const api = await connect()
-      const known = new Set((await listManifests()).map((m) => m.rootCid))
-      let recovered = 0
-      let skipped = 0
-      for (let i = 0; i < entries.length; i++) {
-        const entry = entries[i]
-        setRecoverState(t('files.recoveringItem', [i + 1, entries.length, entry.name, entry.height]))
-        try {
-          const manifest = await recoverManifestFromHint(api, entry.manifestCid, Number(entry.height))
-          await putManifest(manifest)
-          await putRegistryRecord({
-            rootCid: manifest.rootCid,
-            manifestCid: entry.manifestCid,
-            height: Number(entry.height),
-            evmAddress: evmSigner.address,
-            syncedAt: Date.now(),
-          })
-          recovered += known.has(manifest.rootCid) ? 0 : 1
-          skipped += known.has(manifest.rootCid) ? 1 : 0
-        } catch (e) {
-          setRecoverState(t('files.recoverFailed', [entry.name, (e as Error).message]))
-          return
-        }
+      const names = result.failed.map((f) => f.name).join(', ')
+      const newFiles = t(result.recovered === 1 ? 'files.oneNewFile' : 'files.nNewFiles', [result.recovered])
+      const suffix = result.skipped > 0 ? t('files.skippedSuffix', [result.skipped]) : ''
+      if (result.failed.length > 0) {
+        setRecoverState(
+          result.recovered > 0
+            ? t('files.recoverPartial', [newFiles + suffix, result.failed.length, names])
+            : t('files.recoverAllFailed', [result.failed.length, names]),
+        )
+      } else if (result.recovered > 0 || !auto) {
+        setRecoverState(t('files.recoverDone', [newFiles, suffix, result.total]))
+      } else {
+        setRecoverState(null)
       }
-      await refresh()
-      setRecoverState(
-        t('files.recoverDone', [
-          t(recovered === 1 ? 'files.oneNewFile' : 'files.nNewFiles', [recovered]),
-          skipped > 0 ? t('files.skippedSuffix', [skipped]) : '',
-          entries.length,
-        ]),
-      )
     } catch (e) {
+      setDirCheck({ state: 'done', pending: true })
       setRecoverState(`✗ ${(e as Error).message}`)
     } finally {
       setRecoverBusy(false)
     }
   }
+
+  // auto directory reconciliation once per mount (ConnectedFilesPage remounts
+  // per address, so switching accounts re-runs it naturally)
+  const autoSyncStarted = useRef(false)
+  useEffect(() => {
+    if (autoSyncStarted.current) return
+    autoSyncStarted.current = true
+    void runDirectorySync(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const removeManifest = async (manifest: Manifest) => {
     if (!window.confirm(t('files.deleteConfirm', [manifest.file.name]))) return
@@ -428,10 +460,29 @@ function ConnectedFilesPage() {
   const guideManifest = manifests.find((m) => m.rootCid === operationRoot) ?? manifests[0]
   const unfinishedManifests = manifests.filter((m) => !syncedRootCids.has(m.rootCid))
   const hasUnregisteredFiles = unfinishedManifests.length > 0
+  // guide slot, three states: while the local library is empty and the
+  // directory check/recovery is unsettled, show a waiting card; the first-use
+  // guide only appears once the outcome is settled with nothing pending (the
+  // directory is empty, or every entry is already reconciled)
+  const dirSettledClean = dirCheck.state === 'done' && !dirCheck.pending
+  const showDirectoryCheck = loaded && manifests.length === 0 && !dirSettledClean
+  const showFirstUseGuide = loaded && manifests.length === 0 && dirSettledClean
 
   return (
     <div className="page">
-      {manifests.length === 0 && <FirstUseGuide
+      {showDirectoryCheck && (
+        <section className="card" data-testid="directory-check" aria-busy={dirCheck.state !== 'done'}>
+          <p role="status">{recoverState ?? t('files.checkingDirectory')}</p>
+          {dirCheck.state === 'done' && (
+            <div className="row">
+              <button className="btn small" disabled={recoverBusy} onClick={() => void runDirectorySync(true)}>
+                {t('files.checkRetry')}
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+      {showFirstUseGuide && <FirstUseGuide
         keyPrepared={!!guideManifest?.encryption}
         recoveryConnected={!!evmSigner}
         fileName={guideManifest?.file.name ?? null}
@@ -459,7 +510,7 @@ function ConnectedFilesPage() {
         <div className="card-head">
           <h2>{t('files.myFiles')}</h2>
           <div className="row-actions">
-            <button className="btn ghost small" onClick={() => void recoverFromRegistry()} disabled={recoverBusy}>
+            <button className="btn ghost small" onClick={() => void runDirectorySync(false)} disabled={recoverBusy}>
               {t('files.recoverFromRegistry')}
             </button>
           </div>

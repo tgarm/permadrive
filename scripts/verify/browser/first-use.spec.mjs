@@ -57,6 +57,57 @@ test('first-use guide stays honest with an empty library and a directory account
   await noWalletPrompts(page)
 })
 
+test('empty local library with registry entries waits, auto-recovers and never shows the guide', async ({ page }) => {
+  const cid = 'bafkreig4wikelzw2pttlm6uzgt7hgfulufzdpmbv4wsyl62amkiecux2he'
+  const manifest = {
+    version: 2, network: 'mainnet', rootCid: cid,
+    file: { name: 'recovered.txt', size: 24, sha256: 'ab'.repeat(32), mimeType: 'text/plain' },
+    encryption: null, compression: null, nodes: [],
+    txs: [{ txHash: '0x' + 'ab'.repeat(32), blockHash: '0x' + 'cd'.repeat(32), height: 42 }],
+    uploader: { address: '' }, submittedAt: new Date().toISOString(),
+    recovery: { manifestCid: cid },
+  }
+  const entry = { manifestCid: cid, height: 42, name: 'recovered.txt', size: '24', registeredAt: '1', feePaid: '1' }
+  // gated fetchEntries makes the checking state observable; recoverManifestFromHint is stubbed (zero consensus RPC)
+  await page.addInitScript(() => { window.__delayDirectory = true })
+  await page.route('**/src/signer-context.tsx', r => r.fulfill({contentType:'text/javascript',body:`export const SignerProvider=({children})=>children;const noop=()=>{};export const useSigner=()=>({active:null,evm:{kind:'injected',address:'0x${'11'.repeat(20)}',chainId:870},setActive:noop,setEvm:noop});`}))
+  const source = await readFile(new URL('../../../frontend/src/lib/registry.ts', import.meta.url), 'utf8')
+  const names = [...source.matchAll(/export (?:async )?(?:function|const) (\w+)/g)].map(m=>m[1])
+  await page.route('**/src/lib/registry.ts', r => r.fulfill({contentType:'text/javascript',body:names.map(n=>`export const ${n}=${n==='getEvmBalance'?'async()=>0n':n==='fetchEntries'?`async()=>{if(window.__delayDirectory)await new Promise(r=>{window.__releaseDirectory=r});return [${JSON.stringify(entry)}]}`:'async()=>[]'};`).join('\n')}))
+  await page.route('**/src/chain-context.tsx', r => r.fulfill({contentType:'text/javascript',body:'export const ChainProvider=({children})=>children; const connect=async()=>({}); export const useChain=()=>({connect});'}))
+  await page.route('**/src/lib/manifestRecover.ts', r => r.fulfill({contentType:'text/javascript',body:`export async function recoverManifestFromHint(){return ${JSON.stringify(manifest)}}`}))
+  await page.goto('/')
+  // check unsettled: the waiting card is visible, the first-use guide never appears (unresolved does not mean new)
+  const check = page.getByTestId('directory-check')
+  await expect(check).toBeVisible()
+  await expect(page.getByTestId('first-use-guide')).toHaveCount(0)
+  await page.evaluate(() => window.__releaseDirectory())
+  // auto recovery settled: the file row appears, the waiting card disappears, no guide and no wallet requests throughout
+  await expect(page.locator('.files-table tr').filter({hasText:'recovered.txt'})).toBeVisible()
+  await expect(check).toHaveCount(0)
+  await expect(page.getByTestId('first-use-guide')).toHaveCount(0)
+  await noWalletPrompts(page)
+})
+
+test('failing directory check shows an explicit retry instead of the guide', async ({ page }) => {
+  await connectedDirectoryWithFailure(page)
+  await page.goto('/')
+  const check = page.getByTestId('directory-check')
+  await expect(check).toBeVisible()
+  await expect(check).toContainText('registry RPC rate limited')
+  await expect(check.getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+  await expect(page.getByTestId('first-use-guide')).toHaveCount(0)
+  await noWalletPrompts(page)
+})
+
+// stubs every registry.ts export, but fetchEntries throws (honest presentation of a failed directory check)
+async function connectedDirectoryWithFailure(page) {
+  await page.route('**/src/signer-context.tsx', r => r.fulfill({contentType:'text/javascript',body:`export const SignerProvider=({children})=>children;const noop=()=>{};export const useSigner=()=>({active:null,evm:{kind:'injected',address:'0x${'11'.repeat(20)}',chainId:870},setActive:noop,setEvm:noop});`}))
+  const source = await readFile(new URL('../../../frontend/src/lib/registry.ts', import.meta.url), 'utf8')
+  const names = [...source.matchAll(/export (?:async )?(?:function|const) (\w+)/g)].map(m=>m[1])
+  await page.route('**/src/lib/registry.ts', r => r.fulfill({contentType:'text/javascript',body:names.map(n=>`export const ${n}=${n==='getEvmBalance'?'async()=>0n':n==='fetchEntries'?'async()=>{throw new Error(\'registry RPC rate limited\')}':'async()=>[]'};`).join('\n')}))
+}
+
 test('invalid share links stay on a visible error page without wallet prompts', async ({ page }) => {
   await page.goto('/#/s?m=not-a-cid&h=-1&o=bad&k=bad')
   await expect(page.locator('main')).toContainText(/invalid|not a valid/i)
