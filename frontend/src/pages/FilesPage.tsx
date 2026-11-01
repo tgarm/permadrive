@@ -1,3 +1,4 @@
+import { FirstUseGuide } from './FirstUseGuide'
 // My Files: upload (pack → fee confirmation → sign → confirm → background
 // archive watch), download/retrieval, manifest import/export. The manifest
 // set lives in IndexedDB (rootCid key); archive (indexer mapping) progress is
@@ -61,6 +62,8 @@ export function FilesPage() {
   const { t } = useI18n()
   const { connect } = useChain()
   const { active: activeSigner, evm: evmSigner } = useSigner()
+  const [exportedRoots, setExportedRoots] = useState<Set<string>>(new Set())
+  const [verifiedRoots, setVerifiedRoots] = useState<Set<string>>(new Set())
   const [manifests, setManifests] = useState<Manifest[]>([])
   const [tasks, setTasks] = useState<TaskRecord[]>([])
   const [registryRecords, setRegistryRecords] = useState<RegistryRecord[]>([])
@@ -230,6 +233,7 @@ export function FilesPage() {
           exportUnverified(plain, `sha256 ${plainSha.slice(0, 16)}…`)
           return
         }
+        setVerifiedRoots((old) => new Set(old).add(manifest.rootCid))
         saveBlob(plain, manifest.file.name, manifest.file.mimeType)
         setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.sha256Match', [plainSha.slice(0, 16)]) }))
         return
@@ -238,6 +242,7 @@ export function FilesPage() {
         exportUnverified(result.bytes, result.sha256Match ? 'length' : `sha256 ${result.sha256.slice(0, 16)}…`)
         return
       }
+      setVerifiedRoots((old) => new Set(old).add(manifest.rootCid))
       saveBlob(result.bytes, manifest.file.name, manifest.file.mimeType)
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.sha256Match', [result.sha256.slice(0, 16)]) }))
     } catch (e) {
@@ -258,6 +263,7 @@ export function FilesPage() {
   }
 
   const exportManifest = (manifest: Manifest) => {
+    setExportedRoots((old) => new Set(old).add(manifest.rootCid))
     saveBlob(new TextEncoder().encode(JSON.stringify(manifest, null, 2)), `${manifest.file.name}.manifest.json`, 'application/json')
   }
 
@@ -409,6 +415,17 @@ export function FilesPage() {
 
   return (
     <div className="page">
+      <FirstUseGuide
+        storageConnected={!!activeSigner}
+        recoveryConnected={!!evmSigner}
+        fileName={manifests[0]?.file.name ?? null}
+        backedUp={!!manifests[0] && (exportedRoots.has(manifests[0].rootCid) || registryRecords.some((r) => r.rootCid === manifests[0].rootCid))}
+        verified={!!manifests[0] && verifiedRoots.has(manifests[0].rootCid)}
+        onUpload={() => document.getElementById('first-upload')?.scrollIntoView({ behavior: 'smooth' })}
+        onBackup={() => { if (manifests[0]) exportManifest(manifests[0]) }}
+        onVerify={() => { if (manifests[0]) void download(manifests[0]) }}
+      />
+      <div id="first-upload" />
       <UploadCard
         onPick={() => setNotice(null)}
         onPublished={(manifest) => {

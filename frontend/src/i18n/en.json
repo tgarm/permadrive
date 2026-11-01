@@ -550,5 +550,28 @@
     "badParamBadHeight": "The share link's h (block height hint) is out of safe range.",
     "badParamBadOwner": "The share link's o is not a valid EVM address.",
     "badParamBadKey": "The share link's k is not a 64-hex-digit key."
+  },
+  "onboarding": {
+    "title": "Save your first file",
+    "intro": "Follow these five steps. No wallet request is sent until you choose an action.",
+    "privacy": "Choose your file and privacy",
+    "privacyHelp": "Encryption is recommended and enabled by default. Public uploads cannot be taken back; encrypted files still reveal their name and size.",
+    "wallet": "Prepare the storage account",
+    "walletHelp": "The consensus-chain account pays storage fees. Encrypted uploads also require an EVM account for recovery signatures; its balance is separate. Keep an independent recovery passphrase.",
+    "upload": "Review the fee and upload",
+    "uploadHelp": "Choose a file below, review the estimated storage fee, then explicitly sign the upload. If the result is unknown, verify it rather than pay again.",
+    "backup": "Keep a recovery route",
+    "backupHelp": "Export the file recovery JSON or back up its directory on-chain. Directory backup costs extra. The JSON locates the file; encrypted content still needs your wallet or passphrase.",
+    "verify": "Download and verify",
+    "verifyHelp": "Download once and check integrity. This does not publish your file or release a payment.",
+    "done": "Available",
+    "pending": "Not yet",
+    "recoveryReady": "EVM recovery account connected. Directory registration is optional and has separate fees.",
+    "recoveryMissing": "EVM recovery account not connected. Connect it in the header for encrypted upload or cross-device directory backup. Public downloads do not need a wallet.",
+    "selected": "Guide file: {0}",
+    "start": "Choose a file below",
+    "backupAction": "Export recovery JSON",
+    "verifyAction": "Download and verify",
+    "sessionNotice": "Checks refer to the first file in your current list. Export and verification checks are recorded only for this page session; downloading JSON does not prove you stored it safely."
   }
 }
