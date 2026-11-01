@@ -1,3 +1,4 @@
+import type { Inclusion } from './chain.ts'
 // Re-publishing the manifest into the DSN: the manifest v1 is serialized as a
 // file named `${rootCid}.manifest.json` (fixed name → content-addressed
 // determinism: repacking the same manifest on any device yields the same CID),
@@ -10,7 +11,7 @@
 
 import type { ApiPromise } from '@polkadot/api'
 import { publishPrepared, prepareUpload } from './publish.ts'
-import { getMeta, putMeta } from './store.ts'
+import { getManifest, getMeta, putMeta } from './store.ts'
 import type { Manifest } from './manifest.ts'
 import type { SubstrateSigner } from './wallet/types'
 
@@ -28,8 +29,12 @@ export type ManifestPublicationMeta = ManifestPublication
 
 const manifestPublishMetaKey = (rootCid: string) => `manifestPublish:${rootCid}`
 
-export const getManifestPublishMeta = (rootCid: string): Promise<ManifestPublicationMeta | undefined> =>
-  getMeta<ManifestPublicationMeta>(manifestPublishMetaKey(rootCid))
+export const getManifestPublishMeta = async (rootCid: string): Promise<ManifestPublicationMeta | undefined> => {
+  const manifest = await getManifest(rootCid)
+  const inclusion = manifest?.txs[0]
+  if (manifest?.recovery && inclusion) return { manifestCid: manifest.recovery.manifestCid, height: inclusion.height, txHash: inclusion.txHash }
+  return getMeta<ManifestPublicationMeta>(manifestPublishMetaKey(rootCid))
+}
 
 export const putManifestPublishMeta = (rootCid: string, publication: ManifestPublication): Promise<void> =>
   putMeta(manifestPublishMetaKey(rootCid), publication)
@@ -41,6 +46,7 @@ export async function publishManifestToChain(
   manifest: Manifest,
   signer: SubstrateSigner,
   onStage?: (stage: string, detail?: string) => void,
+  confirmTransaction?: (submit: () => Promise<Inclusion>) => Promise<Inclusion>,
 ): Promise<ManifestPublication> {
   const json = JSON.stringify(manifest)
   const file = new File([json], manifestFileName(manifest), { type: 'application/json' })
@@ -52,6 +58,6 @@ export async function publishManifestToChain(
   // list (${rootCid}.manifest.json is only the locator for the registry entry);
   // the task is persisted as usual and the verify path skips listing per
   // persistManifest
-  const outer = await publishPrepared(api, prepared, signer, (stage, detail) => onStage?.(stage, detail), {}, { persist: false })
+  const outer = await publishPrepared(api, prepared, signer, (stage, detail) => onStage?.(stage, detail), {}, { persist: false, confirmTransaction })
   return { manifestCid: outer.rootCid, height: outer.txs[0].height, txHash: outer.txs[0].txHash }
 }

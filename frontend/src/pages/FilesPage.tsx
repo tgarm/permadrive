@@ -1,3 +1,6 @@
+import { resumeRead } from '../lib/resumeRead'
+import { useWalletStep } from './WalletStep'
+import { FundingStatus } from './FundingStatus'
 import { FirstUseGuide } from './FirstUseGuide'
 // My Files: upload (pack → fee confirmation → sign → confirm → background
 // archive watch), download/retrieval, manifest import/export. The manifest
@@ -27,7 +30,7 @@ import { type Manifest } from '../lib/manifest'
 import { retrieveFile } from '../lib/retrieve'
 import { publishManifestToChain } from '../lib/manifestPublish'
 import { recoverManifestFromHint } from '../lib/manifestRecover'
-import { fetchEntries, quoteRegisterFee, registerFile } from '../lib/registry'
+import { fetchEntries, getEvmBalance, quoteRegisterFee, registryPublicClient, registerFile } from '../lib/registry'
 import { IndexerClient } from '../lib/indexer'
 import { signEvmMessage } from '../lib/vault'
 import { decryptFileBytes } from '../lib/fileCrypto'
@@ -53,7 +56,7 @@ import { PendingPublishNotice } from './PendingPublishNotice'
 import { SharePanel } from './SharePanel'
 import { UploadCard } from './UploadCard'
 import { deriveShareInfo, type ShareInfo } from '../lib/shareState'
-import { putManifestPublishMeta } from '../lib/manifestPublish'
+import { getManifestPublishMeta, putManifestPublishMeta } from '../lib/manifestPublish'
 import { useI18n } from '../i18n'
 
 type RowBusy = Record<string, string>
@@ -80,6 +83,9 @@ export function FilesPage() {
   // three-state sharing: per-file on-chain derived badges + the share panel anchor
   const [shareInfos, setShareInfos] = useState<Map<string, ShareInfo>>(new Map())
   const [sharePanelRoot, setSharePanelRoot] = useState<string | null>(null)
+  const { runWalletAction, walletStep, updateWalletProgress } = useWalletStep()
+  const [operationRoot, setOperationRoot] = useState<string | null>(null)
+  const resuming = useRef(false)
   const watching = useRef(new Set<string>())
 
   const refreshPendingPublish = useCallback(async () => {
@@ -121,6 +127,10 @@ export function FilesPage() {
       // persisted in the same transaction that deletes the task (F03)
       const manifest = await verifyPublishTask(api, record)
       if (manifest) {
+        if (record.persistManifest === false && record.file.name.endsWith('.manifest.json')) {
+          const rootCid = record.file.name.slice(0, -'.manifest.json'.length)
+          await putManifestPublishMeta(rootCid, { manifestCid: manifest.rootCid, height: manifest.txs[0].height, txHash: manifest.txs[0].txHash })
+        }
         setNotice(t('publishPending.recovered', [manifest.file.name]))
       } else {
         setNotice(t('publishPending.notFound'))
@@ -250,60 +260,77 @@ export function FilesPage() {
 
   const syncedRootCids = new Set(registryRecords.map((r) => r.rootCid))
 
-  const syncToRegistry = async (manifest: Manifest) => {
+  const syncToRegistry = async (manifest: Manifest, fromResume = false) => {
+    if (resuming.current) return
+    setOperationRoot(manifest.rootCid)
     setNotice(null)
-    if (!activeSigner) {
-      setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.needSubstrate') }))
-      return
-    }
     if (!evmSigner) {
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.needEvm') }))
       return
     }
-    const existing = registryRecords.find((r) => r.rootCid === manifest.rootCid)
+    const existing = registryRecords.find((r) => r.rootCid === manifest.rootCid && r.evmAddress.toLowerCase() === evmSigner.address.toLowerCase())
     if (existing) {
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.alreadyHosted', [existing.manifestCid.slice(0, 16), existing.height]) }))
       return
     }
-    if (!window.confirm(t('onboarding.backupConfirm'))) return
+    resuming.current = true
     setSyncing((s) => new Set(s).add(manifest.rootCid))
+    const progress = (message: string) => setRowBusy((b) => ({ ...b, [manifest.rootCid]: message }))
+    const read = <T,>(phase: string, action: () => Promise<T>) => resumeRead(phase, t(`resume.${phase}`), action, progress, t('resume.timeout'))
     try {
-      const api = await connect()
+      const savedPublication = await read('local', () => getManifestPublishMeta(manifest.rootCid))
+      if (savedPublication) {
+        const entry = (await read('directory', () => fetchEntries(evmSigner.address))).find((e) => e.manifestCid === savedPublication.manifestCid)
+        if (entry) {
+          await putRegistryRecord({ rootCid: manifest.rootCid, manifestCid: entry.manifestCid, height: Number(entry.height), evmAddress: evmSigner.address, syncedAt: Date.now() })
+          await refresh()
+          setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.registeredAlready') }))
+          return
+        }
+      }
+      const fee = await read('fee', () => quoteRegisterFee(manifest.file.size))
+      const gasReserve = 250_000n * await read('gas', () => registryPublicClient().getGasPrice())
+      if (await read('balance', () => getEvmBalance(evmSigner.address)) < fee + gasReserve) throw new Error(t('funding.insufficientEvm'))
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('stage.packingManifest') }))
-      const publication = await publishManifestToChain(api, manifest, activeSigner, (stage, detail) => {
-        // manifest publication uses different progress copy than content upload (it emphasizes the manifest itself)
-        const text = {
-          signing: t('stage.manifestSigning'),
-          submitting: t('stage.manifestSubmitting'),
-          submitted: t('stage.submitted'),
-          scanning: t('stage.manifestScanning'),
-          confirming: t('stage.manifestConfirming'),
-          'packing-manifest': t('stage.packingManifest'),
-        }[stage] ?? stage
-        setRowBusy((b) => ({ ...b, [manifest.rootCid]: detail ? `${text} ${detail}` : text }))
-      })
+      const waiting = await read('pending', () => listPendingPublish())
+      if (waiting.some((task) => task.file.name === `${manifest.rootCid}.manifest.json`)) {
+        throw new Error(t('onboarding.resolveFirst'))
+      }
+      const publication = await (async () => {
+        if (savedPublication) return savedPublication
+        if (!activeSigner) throw new Error(t('files.needSubstrate'))
+        const api = await read('consensus', () => connect())
+        progress(t('resume.manifest'))
+        return publishManifestToChain(api, manifest, activeSigner, (stage, detail) => {
+          // manifest publication uses different progress copy than content upload (it emphasizes the manifest itself)
+          const text = {
+            'preparing-wallet': t('walletSteps.preparing'),
+            signing: t('stage.manifestSigning'),
+            submitting: t('stage.manifestSubmitting'),
+            submitted: t('stage.submitted'),
+            scanning: t('stage.manifestScanning'),
+            confirming: t('stage.manifestConfirming'),
+            'packing-manifest': t('stage.packingManifest'),
+          }[stage] ?? stage
+          updateWalletProgress(text)
+          setRowBusy((b) => ({ ...b, [manifest.rootCid]: detail ? `${text} ${detail}` : text }))
+        }, (submit) => runWalletAction(t('walletSteps.manifest'), t('walletSteps.manifestHelp'), submit))
+      })()
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.manifestPublished', [publication.height]) }))
       // share-panel meta sidecar: sharing stays usable even when the Registry
       // registration fails
-      void putManifestPublishMeta(manifest.rootCid, {
+      await putManifestPublishMeta(manifest.rootCid, {
         manifestCid: publication.manifestCid,
         height: publication.height,
         txHash: publication.txHash,
       })
       // dev fee = max(minFee, 10% of the storage-fee estimate); quoted before payment
-      const fee = await quoteRegisterFee(manifest.file.size)
       const feeAi3 = (Number(fee) / 1e18).toFixed(4)
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.registering', [feeAi3]) }))
-      const reg = await registerFile(
-        evmSigner,
-        {
-          manifestCid: publication.manifestCid,
-          height: publication.height,
-          name: manifest.file.name,
-          size: manifest.file.size,
-        },
-        { fee },
-      )
+      const register = () => registerFile(evmSigner, { manifestCid: publication.manifestCid, height: publication.height, name: manifest.file.name, size: manifest.file.size }, { fee })
+      const reg = fromResume && savedPublication
+        ? await register()
+        : await runWalletAction(t('walletSteps.register'), `${t('walletSteps.registerHelp', [feeAi3, (Number(gasReserve) / 1e18).toFixed(6)])} ${t('onboarding.localRisk')}`, register)
       await putRegistryRecord({
         rootCid: manifest.rootCid,
         manifestCid: publication.manifestCid,
@@ -321,6 +348,7 @@ export function FilesPage() {
     } catch (e) {
       setRowBusy((b) => ({ ...b, [manifest.rootCid]: `✗ ${(e as Error).message}` }))
     } finally {
+      resuming.current = false
       setSyncing((s) => {
         const next = new Set(s)
         next.delete(manifest.rootCid)
@@ -391,27 +419,32 @@ export function FilesPage() {
   }
 
   const taskByRoot = new Map(tasks.map((tk) => [tk.id, tk]))
+  const guideManifest = manifests.find((m) => m.rootCid === operationRoot) ?? manifests[0]
+  const unfinishedManifests = manifests.filter((m) => !syncedRootCids.has(m.rootCid))
+  const hasUnregisteredFiles = unfinishedManifests.length > 0
 
   return (
     <div className="page">
-      <FirstUseGuide
-        storageConnected={!!activeSigner}
+      {manifests.length === 0 && <FirstUseGuide
+        keyPrepared={!!guideManifest?.encryption}
         recoveryConnected={!!evmSigner}
-        fileName={manifests[0]?.file.name ?? null}
-        backedUp={!!manifests[0] && registryRecords.some((r) => r.rootCid === manifests[0].rootCid)}
-        verified={!!manifests[0] && verifiedRoots.has(manifests[0].rootCid)}
+        fileName={guideManifest?.file.name ?? null}
+        backedUp={!!guideManifest && syncedRootCids.has(guideManifest.rootCid)}
+        verified={!!guideManifest && verifiedRoots.has(guideManifest.rootCid)}
         onUpload={() => document.getElementById('first-upload')?.scrollIntoView({ behavior: 'smooth' })}
-        onBackup={() => { if (manifests[0]) void syncToRegistry(manifests[0]) }}
-        busy={!!manifests[0] && syncing.has(manifests[0].rootCid)}
-        onVerify={() => { if (manifests[0]) void download(manifests[0]) }}
-      />
+        busy={!!guideManifest && syncing.has(guideManifest.rootCid)}
+        onVerify={() => { if (guideManifest) void download(guideManifest) }}
+      />}
       <div id="first-upload" />
       <UploadCard
-        onPick={() => setNotice(null)}
+        runWalletAction={runWalletAction}
+        onWalletProgress={updateWalletProgress}
+        onPick={() => { setNotice(null); setOperationRoot(null) }}
         onPublished={(manifest) => {
-          setNotice(t('files.publishedNotice', [manifest.txs[0].height, manifest.txs[0].txHash.slice(0, 18) + '…']))
+          setNotice(null)
           void watchArchive(manifest)
           void refresh()
+          void syncToRegistry(manifest)
         }}
         onError={() => void refreshPendingPublish()}
       />
@@ -425,6 +458,25 @@ export function FilesPage() {
             </button>
           </div>
         </div>
+        <div className="file-operation" data-testid="file-operation">
+          {evmSigner && manifests.length > 0 && <label className="row">
+            {t('funding.file')}
+            <select aria-label={t('funding.file')} value={operationRoot ?? ''} onChange={(e) => setOperationRoot(e.target.value || null)}>
+              <option value="">{t('funding.chooseFile')}</option>
+              {manifests.map((m) => <option key={m.rootCid} value={m.rootCid}>{m.file.name}</option>)}
+            </select>
+          </label>}
+      {unfinishedManifests.length > 0 && (
+        <section className="card" data-testid="unfinished-storage">
+          <h3>{t('onboarding.unfinished')}</h3>
+          <p>{t('onboarding.unfinishedHelp')}</p>
+          <p className="warning" role="alert" data-testid="unfinished-storage-warning" hidden={!hasUnregisteredFiles}>{t('onboarding.localRisk')}</p>
+        </section>
+      )}
+          {operationRoot && rowBusy[operationRoot] && (!syncedRootCids.has(operationRoot) || syncing.has(operationRoot)) && <p role="status" data-testid="save-progress">{rowBusy[operationRoot]}</p>}
+          {walletStep}
+          <FundingStatus manifest={manifests.find((m) => m.rootCid === operationRoot)} />
+        </div>
         <PendingPublishNotice
           records={pendingPublish}
           verifyingId={verifyingId}
@@ -436,20 +488,22 @@ export function FilesPage() {
         <FilesTable
           manifests={manifests}
           taskByRoot={taskByRoot}
+          registryRecords={registryRecords}
           rowBusy={rowBusy}
           syncedRootCids={syncedRootCids}
           syncing={syncing}
+          canSync={!!evmSigner}
           shareInfoByRoot={shareInfos}
           sharePanelRoot={sharePanelRoot}
           onDownload={(m) => void download(m)}
-          onSync={(m) => void syncToRegistry(m)}
+          onSync={(m) => void syncToRegistry(m, true)}
           onDelete={(m) => void removeManifest(m)}
           onShare={(m) => setSharePanelRoot((cur) => (cur === m.rootCid ? null : m.rootCid))}
         />
-        <p className="privacy-note">
+        <div className="privacy-note">
           {t('files.privacyRegistry')}
           <Hint>{t('files.hintRegistry')}</Hint>
-        </p>
+        </div>
       </section>
 
       {/* per-file share panel: three-state actions (list/delist/make public/

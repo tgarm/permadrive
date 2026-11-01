@@ -1,3 +1,5 @@
+import { prepareRecoveryManifest } from '../lib/recoveryManifest'
+import type { RunWalletAction } from './WalletStep'
 // Upload card: drop/choose → pack (optional encryption: K + AES-GCM → the
 // ciphertext packed into the standard DAG) → fee confirmation panel (with the
 // passphrase-channel input) → sign → submit → confirm. The publish pipeline
@@ -43,11 +45,15 @@ interface UploadSession {
 }
 
 export function UploadCard({
+  runWalletAction,
+  onWalletProgress,
   onPick,
   onPublished,
   onError,
 }: {
   /** picking a new file clears the page notice (same behavior as before the split) */
+  onWalletProgress?: (message: string) => void
+  runWalletAction: RunWalletAction
   onPick: () => void
   onPublished: (manifest: Manifest) => void
   onError: () => void
@@ -60,9 +66,11 @@ export function UploadCard({
   // Encrypted by default: sharing is a later action in the file panel, not an
   // upload-time decision; plaintext is an explicit (advanced) choice
   const [uploadPassphrase, setUploadPassphrase] = useState('')
+  const confirming = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const pickFile = async (file: File) => {
+    if (confirming.current) return
     onPick()
     if (file.size > MAX_UPLOAD_BYTES) {
       setUpload({ fileName: file.name, fileSize: file.size, stage: 'error', error: t('files.maxSizeError', [formatBytes(MAX_UPLOAD_BYTES)]) })
@@ -102,8 +110,14 @@ export function UploadCard({
       setUpload({ ...u, stage: 'error', error: t('files.noSignerUpload') })
       return
     }
+    if (confirming.current) return
+    confirming.current = true
+    setUpload({ ...u, stage: 'signing', detail: t('walletSteps.title') })
     try {
       const api = await connect()
+      const funds = (await api.query.system.account(activeSigner.address)).toJSON() as unknown as { data: { free: string; frozen?: string } }
+      const available = BigInt(funds.data.free) - BigInt(funds.data.frozen ?? '0')
+      if (available < u.fee.shannons) throw new Error(t('funding.insufficientStorage'))
       let overrides: PublishOverrides = {}
       if (u.encrypt) {
         if (!u.encSession || !evmSigner) {
@@ -114,17 +128,33 @@ export function UploadCard({
         // Signature channel (determinism self-check; always true for local
         // keys) + optional passphrase channel; an injected wallet that fails
         // the check with no passphrase → requireChannel throws and prompts
-        await addSignatureChannel(u.encSession, evmSigner.address, (msg) => signEvmMessage(evmSigner, msg))
+        let signatureStep = 0
+        let cancelled: unknown
+        await addSignatureChannel(u.encSession, evmSigner.address, async (msg) => {
+          try {
+            return await runWalletAction(t('walletSteps.unlock', [++signatureStep]), t('walletSteps.unlockHelp'), () => signEvmMessage(evmSigner, msg))
+          } catch (error) { cancelled = error; throw error }
+        })
+        if (cancelled) throw cancelled
         if (uploadPassphrase) await addPassphraseChannel(u.encSession, uploadPassphrase)
         requireChannel(u.encSession)
         overrides = { file: { sha256: u.plainSha256, size: u.plainSize, mimeType: u.plainMimeType }, encryption: u.encSession.encryption }
       }
+      const recovery = await prepareRecoveryManifest(u.prepared, overrides, (await api.rpc.system.chain()).toString(), activeSigner.address)
+      const combinedFee = await estimateFee(api, u.prepared.totalBytes + recovery.totalBytes)
+      const currentFunds = (await api.query.system.account(activeSigner.address)).toJSON() as unknown as { data: { free: string; frozen?: string } }
+      if (BigInt(currentFunds.data.free) - BigInt(currentFunds.data.frozen ?? '0') < combinedFee.shannons) throw new Error(t('funding.insufficientStorage'))
+      setUpload((cur) => cur ? { ...cur, fee: combinedFee, detail: t('walletSteps.upload') } : cur)
       const manifest = await publishPrepared(
         api,
         u.prepared,
         activeSigner,
-        (stage, detail) => setUpload((cur) => (cur ? { ...cur, stage, detail } : cur)),
+        (stage, detail) => {
+          onWalletProgress?.(t(stage === 'preparing-wallet' ? 'walletSteps.preparing' : `stage.${stage}`))
+          setUpload((cur) => (cur ? { ...cur, stage, detail } : cur))
+        },
         overrides,
+        { recovery, confirmTransaction: (submit) => runWalletAction(t('walletSteps.upload'), `${t('walletSteps.uploadHelp', [combinedFee.ai3.toFixed(6)])} ${t('onboarding.localRisk')}`, submit) },
       )
       // publishPrepared already persisted the manifest in the same transaction
       // that deleted the task (F03)
@@ -164,7 +194,7 @@ export function UploadCard({
             e.target.value = ''
           }}
         />
-        <button className="btn primary" onClick={() => fileInputRef.current?.click()}>
+        <button className="btn primary" disabled={!!upload && !['awaiting-confirm', 'error'].includes(upload.stage)} onClick={() => fileInputRef.current?.click()}>
           {t('files.chooseFile')}
         </button>
         <span className="muted">{t('files.dropHint', [formatBytes(MAX_UPLOAD_BYTES)])}</span>
@@ -206,14 +236,17 @@ export function UploadCard({
                     <span>🔒 {t('files.encryptedBadge')}</span>
                   </div>
                   <div className="kv">
-                    <span>{t('files.passphraseChannel')}</span>
+                    <label htmlFor="upload-recovery-password">{t('files.passphraseChannel')}</label>
                     <input
+                      id="upload-recovery-password"
                       type="password"
+                      autoComplete="new-password"
                       value={uploadPassphrase}
                       placeholder={t('files.passphrasePlaceholder')}
                       onChange={(e) => setUploadPassphrase(e.target.value)}
                     />
                   </div>
+                  <p className="privacy-note">{t('files.passphraseHelp')}</p>
                 </>
               ) : (
                 <div className="kv">
@@ -221,6 +254,9 @@ export function UploadCard({
                   <span>🌐 {t('files.plainBadge')}</span>
                 </div>
               )}
+              <p className="privacy-note">{t('files.initialEstimateHelp')}</p>
+              <p className="privacy-note">{t('files.signaturePlan')}</p>
+              <p className="warning">{t('onboarding.localRisk')}</p>
               <p className="warning">{t('files.warningPermanent')}</p>
               {upload.encrypt ? (
                 <p className="warning">{t('files.encryptPrivacy')}</p>
@@ -252,14 +288,14 @@ export function UploadCard({
         </div>
       )}
 
-      <p className="privacy-note">
+      <div className="privacy-note">
         {t('files.privacyShort')}
         <Hint>
           {t('files.hintSyncTitle')}
           <br />
           {t('files.hintSyncBody')}
         </Hint>
-      </p>
+      </div>
     </section>
   )
 }
@@ -267,6 +303,7 @@ export function UploadCard({
 // Upload session progress line: stage is a stable identifier, copy comes from the dictionary (stage.*)
 function stageText(stage: UploadSession['stage']): string {
   const map: Record<string, string> = {
+    'preparing-wallet': 'walletSteps.preparing',
     packing: 'stage.packing',
     'awaiting-confirm': 'stage.awaitingConfirm',
     signing: 'stage.signing',

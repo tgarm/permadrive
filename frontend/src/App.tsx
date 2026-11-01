@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { WalletProvider } from '@autonomys/auto-wallet-react'
+import { ConsensusWalletProvider } from './consensus-wallet-context'
 import { ChainProvider } from './chain-context'
 import { SignerProvider } from './signer-context'
 import { LanguageSelect } from './components/LanguageSelect'
@@ -47,8 +47,8 @@ function Shell() {
         <div className="header-side">
           <LanguageSelect />
           <ThemeToggle />
-          <WalletBar />
         </div>
+        <WalletBar />
       </header>
       <nav className="tabs">
         <button className={tab === 'files' ? 'tab active' : 'tab'} onClick={() => setTab('files')}>
@@ -106,12 +106,12 @@ function Shell() {
 
 export default function App() {
   return (
-    <WalletProvider config={{ dappName: 'PermaDrive' }}>
+    <ConsensusWalletProvider>
       <SignerProvider>
         <ChainProvider>
           <Shell />
         </ChainProvider>
       </SignerProvider>
-    </WalletProvider>
+    </ConsensusWalletProvider>
   )
 }

@@ -35,8 +35,7 @@ test('first-use guide stays honest with an empty library and no wallet', async (
   await expect(guide.locator('li')).toHaveCount(4)
   await expect(page.getByRole('button', { name: /import manifest|export recovery|manifest json/i })).toHaveCount(0)
   await expect(page.getByText('Upload plaintext instead')).toHaveCount(0)
-  await expect(guide.locator('button').nth(1)).toBeDisabled()
-  await expect(guide.locator('button').nth(2)).toBeDisabled()
+  await expect(guide.getByRole('button', {name:'Download and verify',exact:true})).toHaveCount(0)
   await guide.locator('button').first().click()
   await noWalletPrompts(page)
 })
@@ -126,4 +125,77 @@ test('mock paid purchase requires confirmation and cancellation submits nothing'
   page.once('dialog',d=>d.accept())
   await button.click()
   await expect.poll(()=>page.evaluate(()=>window.__purchases)).toBe(1)
+})
+
+test('fee estimate is hidden without a wallet and a selected file', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByTestId('funding-status')).toHaveCount(0)
+  await noWalletPrompts(page)
+})
+
+test('unfinished directory reminder survives reload without resubmitting an upload', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const store = await import('/src/lib/store.ts')
+    await store.putManifest({ version: 2, network: 'mainnet', rootCid: 'fixture-unfinished', file: {name:'pending-backup.txt',size:1,sha256:'00'.repeat(32),mimeType:'text/plain'}, encryption:null, nodes:[], txs:[], compression:null,uploader:{address:''}, submittedAt:new Date().toISOString() })
+  })
+  await page.reload()
+  const reminder = page.getByTestId('unfinished-storage')
+  await expect(reminder).toBeVisible()
+  const row = page.locator('tr').filter({hasText:'pending-backup.txt'})
+  await expect(row.getByRole('img', {name:'Incomplete · index pending',exact:true})).toBeVisible()
+  await expect(page.getByTestId('first-use-guide')).toHaveCount(0)
+  await expect(row.getByRole('button', {name:'Continue saving file',exact:true})).toBeDisabled()
+  await expect(row.getByRole('button', {name:'Download',exact:true})).toHaveCount(0)
+  const hash = row.getByRole('button', {name:/000000000000…00000000/})
+  await expect(hash).toBeVisible()
+  await hash.click()
+  const fullHash = row.getByRole('button', {name:'00'.repeat(32),exact:true})
+  await expect(fullHash).toBeVisible()
+  await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', {configurable:true,value:{writeText:async value=>{window.__copiedHash=value}}}) })
+  await fullHash.click()
+  await expect(row).toContainText('Hash copied')
+  expect(await page.evaluate(() => window.__copiedHash)).toBe('00'.repeat(32))
+  await expect(page.getByRole('button', {name:'Download and verify',exact:true})).toHaveCount(0)
+  await noWalletPrompts(page)
+})
+
+
+test('each wallet step requires its own click and cancellation stops the sequence', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const reactModule = await import('/node_modules/.vite/deps/react.js')
+    const React = reactModule.default ?? reactModule
+    const domModule = await import('/node_modules/.vite/deps/react-dom_client.js')
+    const { createRoot } = domModule.default ?? domModule
+    const { useWalletStep } = await import('/src/pages/WalletStep.tsx')
+    window.__stepCalls = []
+    function Harness() {
+      const { runWalletAction, walletStep } = useWalletStep()
+      const run = async () => {
+        try {
+          for (const label of ['Unlock 1/2', 'Unlock 2/2', 'Save file and recovery', 'Register directory']) {
+            await runWalletAction(label, `Purpose: ${label}`, async () => { window.__stepCalls.push(label) })
+          }
+        } catch { window.__stepCalls.push('cancelled') }
+      }
+      return React.createElement('div', null, React.createElement('button', { onClick: run }, 'Start steps'), walletStep)
+    }
+    const host = document.createElement('div')
+    document.body.append(host)
+    createRoot(host).render(React.createElement(Harness))
+  })
+  await page.getByRole('button', { name: 'Start steps', exact: true }).click()
+  const card = page.getByTestId('wallet-step')
+  await expect(card.getByText('Purpose: Unlock 1/2')).toBeVisible()
+  expect(await page.evaluate(() => window.__stepCalls)).toEqual([])
+  const labels = ['Unlock 1/2', 'Unlock 2/2', 'Save file and recovery']
+  for (let i = 0; i < labels.length; i++) {
+    await card.getByRole('button', { name: labels[i], exact: true }).click()
+    await expect.poll(() => page.evaluate(() => window.__stepCalls)).toEqual(labels.slice(0, i + 1))
+  }
+  await expect(card.getByRole('button', { name: 'Register directory', exact: true })).toBeVisible()
+  await card.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(card).toHaveCount(0)
+  expect(await page.evaluate(() => window.__stepCalls)).toEqual([...labels, 'cancelled'])
 })

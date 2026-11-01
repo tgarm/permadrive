@@ -99,7 +99,16 @@ function reqOf(provider: unknown): RawEip1193Request {
 
 /** Encryption pubkey (wallet-hosted, the announced value; base64 x25519 pubkey) */
 export async function injectedEncryptionPublicKey(provider: unknown, address: string): Promise<string> {
-  const key = await reqOf(provider)({ method: 'eth_getEncryptionPublicKey', params: [address] })
+  let key: unknown
+  try {
+    key = await reqOf(provider)({ method: 'eth_getEncryptionPublicKey', params: [address] })
+  } catch (error) {
+    const e = error as { code?: number; message?: string }
+    if (e.code === -32601 || e.code === 4200 || /not supported|unsupported|not implemented/i.test(e.message ?? '')) {
+      throw new Error(t('errors.walletEncryptionUnsupported'))
+    }
+    throw error
+  }
   if (typeof key !== 'string' || key.length === 0) throw new Error(t('errors.boxNoEncryptionPublicKey'))
   return key
 }

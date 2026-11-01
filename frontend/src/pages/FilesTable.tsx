@@ -3,17 +3,20 @@
 // public) and row actions. The action callbacks are injected by FilesPage
 // (download / export manifest / sync to registry / delete / share panel).
 
+import { useState } from 'react'
 import { formatBytes } from '../lib/bytes'
 import type { Manifest } from '../lib/manifest'
-import type { TaskRecord } from '../lib/store'
+import type { RegistryRecord, TaskRecord } from '../lib/store'
 import type { ShareInfo } from '../lib/shareState'
 import { useI18n } from '../i18n'
 
 interface FilesTableProps {
   manifests: Manifest[]
+  registryRecords: RegistryRecord[]
   taskByRoot: Map<string, TaskRecord>
   rowBusy: Record<string, string>
   syncedRootCids: Set<string>
+  canSync: boolean
   syncing: Set<string>
   shareInfoByRoot: Map<string, ShareInfo>
   sharePanelRoot: string | null
@@ -40,12 +43,30 @@ function shareBadge(info: ShareInfo | undefined, t: (k: string) => string): { ic
   }
 }
 
+function FileHash({ value }: { value: string }) {
+  const { t } = useI18n()
+  const [expanded, setExpanded] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const click = async () => {
+    if (!expanded) { setExpanded(true); return }
+    try { await navigator.clipboard.writeText(value); setResult(t('files.hashCopied')) }
+    catch { setResult(t('files.hashCopyFailed')) }
+  }
+  return <div className="file-hash">
+    <span className="muted small-text">{t('files.originalHash')}</span>
+    <button className="btn ghost small mono hash-button" title={t(expanded ? 'files.hashCopy' : 'files.hashExpand')} onClick={() => void click()}>{expanded ? value : `${value.slice(0, 12)}…${value.slice(-8)}`}</button>
+    <span role="status" className="small-text">{result}</span>
+  </div>
+}
+
 export function FilesTable({
   manifests,
+  registryRecords,
   taskByRoot,
   rowBusy,
   syncedRootCids,
   syncing,
+  canSync,
   shareInfoByRoot,
   sharePanelRoot,
   onDownload,
@@ -62,14 +83,15 @@ export function FilesTable({
           <th>{t('files.thFile')}</th>
           <th>{t('common.size')}</th>
           <th>{t('files.thDsn')}</th>
-          <th>{t('files.thRegistry')}</th>
+          <th>{t('files.saveStatus')}</th>
           <th>{t('files.thShare')}</th>
-          <th>{t('files.thPublished')}</th>
           <th>{t('common.actions')}</th>
         </tr>
       </thead>
       <tbody>
         {manifests.map((m) => {
+          const registrations = registryRecords.filter((record) => record.rootCid === m.rootCid)
+          const complete = syncedRootCids.has(m.rootCid)
           const task = taskByRoot.get(m.rootCid)
           const badge = shareBadge(shareInfoByRoot.get(m.rootCid), t)
           return (
@@ -79,48 +101,36 @@ export function FilesTable({
                   {m.encryption ? '🔒 ' : ''}
                   {m.file.name}
                 </div>
-                <div className="mono small-text muted">{m.rootCid.slice(0, 24)}…</div>
-                {rowBusy[m.rootCid] && <div className="small-text row-status">{rowBusy[m.rootCid]}</div>}
+                <div className="small-text muted">{m.file.mimeType}</div>
+                {!syncedRootCids.has(m.rootCid) && <FileHash value={m.file.sha256} />}
+                {rowBusy[m.rootCid] && (!complete || syncing.has(m.rootCid)) && <div className="small-text row-status">{rowBusy[m.rootCid]}</div>}
               </td>
               <td>{formatBytes(m.file.size)}</td>
               <td>
-                {!task ? (
-                  <span className="muted">{t('files.archiveUnknown')}</span>
-                ) : task.done ? (
-                  <span className="ok">{t('files.archived')}</span>
-                ) : (
-                  <span>
-                    {task.indexed}/{task.total} {t('files.indexed')}
-                  </span>
-                )}
+                <span role="img" tabIndex={0} className={task?.done ? 'ok file-status-icon' : 'muted file-status-icon'} aria-label={t(!task ? 'files.archiveUnknown' : task.done ? 'files.archived' : 'files.archiving')} title={!task ? t('files.archiveUnknown') : task.done ? t('files.archived') : `${t('files.archiving')} ${task.indexed}/${task.total}`}>{!task ? '○' : task.done ? '✓' : '◷'}</span>
               </td>
               <td>
-                {syncedRootCids.has(m.rootCid) ? (
-                  <span className="ok">{t('files.registered')}</span>
-                ) : (
-                  <span className="muted">{t('files.notRegistered')}</span>
-                )}
+                <span role="img" tabIndex={0} className={complete ? 'ok file-status-icon' : 'file-status-icon'} aria-label={t(complete ? 'files.saveComplete' : 'files.saveIncomplete')} title={t(complete ? 'files.saveComplete' : 'files.saveIncomplete')}>{complete ? '✓' : '◷'}</span>
               </td>
-              <td>
-                <span
-                  className="share-badge"
-                  title={t('share.badgeHint')}
-                >
-                  {badge.icon} {badge.label}
-                </span>
-              </td>
-              <td className="small-text">{new Date(m.submittedAt).toLocaleString()}</td>
+              <td><span role="img" tabIndex={0} className="share-badge" aria-label={badge.label} title={badge.label}>{badge.icon}</span></td>
               <td>
                 <div className="row-actions">
-                  <button className="btn small" onClick={() => onDownload(m)}>
-                    {t('common.download')}
-                  </button>
-                  <button className={`btn ghost small ${sharePanelRoot === m.rootCid ? 'active' : ''}`} onClick={() => onShare(m)}>
-                    {t('files.shareBtn')}
-                  </button>
-                  <button className="btn ghost small" onClick={() => onSync(m)} disabled={syncing.has(m.rootCid)}>
-                    {t('files.syncRegistry')}
-                  </button>
+                  {syncedRootCids.has(m.rootCid) ? <>
+                    <button className="btn small" onClick={() => onDownload(m)}>{t('common.download')}</button>
+                    <button className={`btn ghost small ${sharePanelRoot === m.rootCid ? 'active' : ''}`} onClick={() => onShare(m)}>{t('files.shareBtn')}</button>
+                  </> : <button className="btn primary small" onClick={() => onSync(m)} disabled={!canSync || syncing.has(m.rootCid)} aria-busy={syncing.has(m.rootCid)}>{t(syncing.has(m.rootCid) ? 'walletSteps.waiting' : 'onboarding.resume')}</button>}
+                  <details className="file-details">
+                    <summary>{t('files.details')}</summary>
+                    <dl>
+                      <dt>CID</dt><dd className="mono">{m.rootCid}</dd>
+                      <dt>{t('files.thPublished')}</dt><dd>{new Date(m.submittedAt).toLocaleString()}</dd>
+                      <dt>{t('common.size')}</dt><dd>{m.file.size.toLocaleString()} B</dd>
+                      {complete && <><dt>SHA-256</dt><dd className="mono">{m.file.sha256}</dd></>}
+                      {m.txs.map((tx) => <div key={tx.txHash}><dt>{t('files.storageTransaction')}</dt><dd className="mono">#{tx.height} · {tx.txHash}</dd></div>)}
+                      {registrations.map((record) => <div key={record.evmAddress}><dt>{t('files.indexDetails')}</dt><dd className="mono">{record.evmAddress}<br />{record.manifestCid}<br />#{record.height}</dd></div>)}
+                      {complete && rowBusy[m.rootCid] && <><dt>{t('files.lastResult')}</dt><dd>{rowBusy[m.rootCid]}</dd></>}
+                    </dl>
+                  </details>
                   <button className="btn ghost small danger" onClick={() => onDelete(m)}>
                     {t('common.delete')}
                   </button>

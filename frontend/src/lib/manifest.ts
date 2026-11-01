@@ -40,6 +40,8 @@ export interface ManifestEncryption {
 
 export interface Manifest {
   version: 1 | 2
+  /** Recovery document published in the same transaction as the content. */
+  recovery?: { manifestCid: string }
   network: string
   rootCid: string
   file: { name: string; size: number; sha256: string; mimeType: string | null }
@@ -96,6 +98,12 @@ export function validateManifest(m: unknown): string | null {
     if (typeof n.cid !== 'string' || !CID_LIKE.test(n.cid)) return t('errors.manifestInvalidNodeCid', [String(n.cid)])
     if (typeof n.blake3 !== 'string' || !BLAKE3_HEX.test(n.blake3)) return t('errors.manifestInvalidNodeBlake3', [String(n.blake3)])
     if (typeof n.bytes !== 'number') return t('errors.manifestInvalidNodeBytes')
+  }
+  if (v.recovery !== undefined) {
+    const recovery = v.recovery as { manifestCid?: unknown } | null
+    if (!recovery || typeof recovery.manifestCid !== 'string' || !CID_LIKE.test(recovery.manifestCid) || !Array.isArray(v.txs) || v.txs.length !== 1) {
+      return t('errors.recoveryBatchIncomplete')
+    }
   }
   if (!Array.isArray(v.txs) || v.txs.length === 0) return t('errors.manifestTxsEmpty')
   for (const tx of v.txs as Record<string, unknown>[]) {

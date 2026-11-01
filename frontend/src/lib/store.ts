@@ -54,6 +54,8 @@ export interface PublishTaskRecord {
   overridesFile: Record<string, unknown> | null
   encryption: unknown | null
   nodes: { cid: string; blake3: string; bytes: number }[]
+  /** Additional recovery nodes in the same, single transaction. Absent on legacy tasks. */
+  recovery?: { manifestCid: string; nodes: { cid: string; blake3: string; bytes: number }[] }
   totalBytes: number
   startHeight: number
   txHashes: string[]

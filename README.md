@@ -7,13 +7,13 @@ Files are packed into IPLD DAGs in the browser and published directly to the Aut
 ## How it works
 
 1. **Pack** — the file is packed into an IPLD DAG (64 KiB nodes) in the browser, byte-compatible with the official AutoDrive backend's `onchainPublisher`
-2. **Publish** — nodes are submitted as `system.remark` extrinsics (batched into a single `utility.batch`), paying the on-chain byte fee once for permanent archival by the farmer network
+2. **Publish** — new My Files uploads save encrypted file nodes and recovery-information nodes together as `system.remark` calls in one `utility.batchAll` transaction, paying the on-chain byte fee once for permanent archival by the farmer network
 3. **Retrieve** — the object-mapping indexer locates the nodes → `chain_getBlock` fetches them by height → local reassembly with sha256 verification
-4. **Register (optional)** — file fingerprints are registered on the FileRegistry contract on Auto-EVM (chainId 870), binding ownership to the wallet address and enabling cross-device recovery
+4. **Register directory** — register the recovery document location to your wallet on FileRegistry, Auto-EVM (chainId 870), to complete cross-device discovery. This is a directory entry, not proof of ownership.
 
 ## Features
 
-- **Wallet-native identity** — sign in with a Substrate extension wallet (Talisman / SubWallet / polkadot.js); an EVM wallet handles registry operations on Auto-EVM
+- **Wallet-native identity** — connect a Substrate extension wallet (Talisman / SubWallet / polkadot.js); mixed EVM/Substrate account lists are filtered before address conversion. Connections are explicit after a reload. An EVM wallet handles registry operations on Auto-EVM. Both wallet columns show independent AI3 balances with read-only refresh; consensus shows available funds (free minus frozen). Failed balance queries are shown as unavailable.
 - **Permanent storage, pay per use** — pay the on-chain byte fee directly (~2.1 AI3/MB, about half the official AutoDrive price, with no 90-day credit expiry)
 - **No required backend** — the build output is fully static and hostable anywhere; all dependencies (RPC, indexer) are permissionless public infrastructure with CORS enabled (browser-direct)
 - **On-chain recovery directory** — recovery manifests are stored on-chain and registered to your wallet; no manual manifest import/export is required
@@ -123,6 +123,8 @@ More from the same family — open-source, pure-frontend tools for Autonomys:
 
 ## First-use guidance and browser checks
 
-My Files provides four visual steps: connect accounts, create an encrypted file, save its on-chain recovery directory, then download and verify. New files are always encrypted; sharing and publication are later actions. Manifest import/export is not part of the user flow. Directory saving requires separate consensus storage and EVM registration fees; until it completes, the file has no wallet-directory recovery backup. Keep your wallet/passphrase safe. Verification checks are session-only.
+My Files provides four visual steps: connect accounts, create an encrypted file, save its on-chain recovery directory, then download and verify. New files are always encrypted; sharing and publication are later actions. Manifest import/export is not part of the user flow. New uploads normally require four explicit wallet confirmations: two free unlock-message signatures, one consensus transaction saving encrypted content and recovery information together, then one EVM directory registration paying the service fee and gas. Complete registration promptly: until then, file-discovery information still depends on this browser. Clearing or corrupting site data may make the file unrecoverable; paid storage fees are not refunded. A reload can resume registration using existing browser records. Keep your wallet/passphrase safe. Verification checks are session-only. See [recovery format and interruption behavior](RECOVERY.md).
 
 Browser checks live in `scripts/verify/browser/`. From `scripts/verify`, install dependencies, run `npx playwright install chromium`, then `npm run browser`. The default suite uses an unfunded wallet sentinel and mock chain fixtures; it never broadcasts transactions. An optional real public-download fixture needs `PD_PUBLIC_SHARE_URL` and `PD_PUBLIC_SHA256`. Real extension-wallet compatibility and mainnet transaction acceptance are separate checks.
+
+Wallet steps remain visible and disabled while the request is being prepared, awaiting approval, or waiting for a chain result. Rejection leaves an explicit error instead of silently advancing. Fee estimates reuse wallet-bar balance snapshots and do not query balances again; refresh the wallet balance to update funding gaps.

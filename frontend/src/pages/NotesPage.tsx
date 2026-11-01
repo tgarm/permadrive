@@ -165,7 +165,8 @@ export function NotesPage() {
       // 1) content file into the DSN
       const manifest = await publishPrepared(api, s.prepared, active, (stage, detail) => {
         const text = {
-          signing: t('stage.signing'),
+          'preparing-wallet': t('walletSteps.preparing'),
+            signing: t('stage.signing'),
           submitting: t('stage.submitting'),
           submitted: t('stage.submitted'),
           scanning: t('stage.scanning'),
@@ -371,10 +372,10 @@ export function NotesPage() {
               ))}
             </div>
           )}
-          <p className="privacy-note">
+          <div className="privacy-note">
             {t('notes.privacyVersioned')}
             <Hint>{t('notes.hintVersions')}</Hint>
-          </p>
+          </div>
         </section>
 
         <section className="card">
@@ -402,10 +403,10 @@ export function NotesPage() {
                   {t('notes.saveDraft')}
                 </button>
               </div>
-              <p className="privacy-note">
+              <div className="privacy-note">
                 {t('notes.privacyPlaintext')}
                 <Hint>{t('notes.hintPlaintext')}</Hint>
-              </p>
+              </div>
 
               {session && (
                 <div className="upload-session">

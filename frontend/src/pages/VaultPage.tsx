@@ -308,7 +308,8 @@ export function VaultPage() {
       const api = await connect()
       const manifest = await publishPrepared(api, s.prepared, active, (stage, detail) => {
         const text = {
-          signing: t('stage.signing'),
+          'preparing-wallet': t('walletSteps.preparing'),
+            signing: t('stage.signing'),
           submitting: t('stage.submitting'),
           submitted: t('stage.submitted'),
           scanning: t('stage.scanning'),
@@ -422,7 +423,7 @@ export function VaultPage() {
       {!record && !keystorePending && (
         <section className="card">
           <h2>{t('vault.createTitle', [evm.address.slice(0, 10)])}</h2>
-          <p className="muted">
+          <div className="muted">
             {t('vault.createIntro')}
             <Hint>
               {t('vault.createHint')}{' '}
@@ -431,7 +432,7 @@ export function VaultPage() {
               </a>
               .
             </Hint>
-          </p>
+          </div>
           <label className="field">
             <span>{t('vault.passphraseLabel')}</span>
             <input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} />
@@ -549,10 +550,10 @@ export function VaultPage() {
               </button>
             </div>
           </div>
-          <p className="privacy-note" style={{ margin: '0 0 10px' }}>
+          <div className="privacy-note" style={{ margin: '0 0 10px' }}>
             {t('vault.privacyMemory')}
             <Hint>{t('vault.hintEncryption')}</Hint>
-          </p>
+          </div>
 
           {draft && (
             <div className="entry-form">

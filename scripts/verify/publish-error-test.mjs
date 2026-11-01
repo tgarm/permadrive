@@ -491,5 +491,147 @@ const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
   ok(!(await storeM.getManifest(sc12cid)), 'S12 persist:false -> the manifest stays out of the file list (manifestPublish semantics)')
 }
 
+// Explicit wallet gate cancellation must precede signing, persistence and submission.
+{
+  const scenario = { submitBehavior: 'ok', submits: [], chain: [], remarkCalls: 0, remarkHashes: [] }
+  const api = mockApi(scenario)
+  let signatures = 0
+  const originalBatch = api.tx.utility.batch
+  api.tx.utility.batch = (...args) => {
+    const tx = originalBatch(...args)
+    tx.signAsync = async () => { signatures++ }
+    return tx
+  }
+  const cid = `bafk-wallet-gate-${Date.now()}`
+  let error
+  try {
+    await publishPrepared(api, prepared(1, cid), signer, onStage, {}, {
+      ...FAST, beforeSign: async () => { throw new Error('step cancelled') },
+    })
+  } catch (caught) { error = caught }
+  ok(error?.message === 'step cancelled', 'wallet gate cancellation propagates')
+  ok(signatures === 0 && scenario.submits.length === 0, 'cancelled wallet step neither signs nor submits')
+  ok(!(await listPendingPublish()).some((p) => p.rootCid === cid), 'cancelled pre-sign step creates no pending transaction')
+}
+
+// Combined storage: real DAG/encryption/recovery, mocked transport only.
+{
+  const { prepareRecoveryManifest } = await import('../../frontend/src/lib/recoveryManifest.ts')
+  const { recoverManifestFromHint } = await import('../../frontend/src/lib/manifestRecover.ts')
+  const { getManifestPublishMeta } = await import('../../frontend/src/lib/manifestPublish.ts')
+  const { retrieveFile } = await import('../../frontend/src/lib/retrieve.ts')
+  const { startEncryption, addPassphraseChannel, decryptFileBytes } = await import('../../frontend/src/lib/fileCrypto.ts')
+  const { sha256Hex } = await import('../../frontend/src/lib/bytes.ts')
+  const plain = new Uint8Array(160_000).map((_, i) => i % 251)
+  const session = await startEncryption(plain)
+  await addPassphraseChannel(session, 'offline recovery fixture')
+  const content = await pubM.prepareUpload(new File([session.cipher], 'combined.bin'))
+  const overrides = { file: { size: plain.length, sha256: await sha256Hex(plain) }, encryption: session.encryption }
+  const recovery = await prepareRecoveryManifest(content, overrides, 'Subspace Mainnet', signer.address)
+  const makeScenario = (submitBehavior = 'ok') => ({ submitBehavior, submits: [], chain: [], remarkCalls: 0, remarkHashes: [] })
+  const combinedApi = (scenario) => {
+    const api = mockApi(scenario)
+    api.tx.utility.batchAll = (calls) => {
+      const tx = api.tx.utility.batch(calls)
+      tx.method.method = 'batchAll'
+      return tx
+    }
+    return api
+  }
+  const scenario = makeScenario()
+  const api = combinedApi(scenario)
+  let gates = 0
+  const manifest = await publishPrepared(api, content, signer, onStage, overrides, { ...FAST, recovery, beforeSign: async () => { gates++ } })
+  ok(gates === 1 && scenario.submits.length === 1, 'combined file + recovery use one signing gate and one broadcast')
+  ok(manifest.recovery?.manifestCid === recovery.rootCid && manifest.nodes.length === content.nodes.length, 'manifest keeps recovery reference and content-only DAG')
+  ok((await getManifestPublishMeta(content.rootCid))?.manifestCid === recovery.rootCid, 'directory/share location survives without a separate meta write')
+  ok(txRegistry.get(scenario.submits[0]).method.method === 'batchAll', 'combined upload uses a single atomic batchAll')
+  const recovered = await recoverManifestFromHint(api, recovery.rootCid, HEAD)
+  ok(recovered.rootCid === content.rootCid && recovered.txs[0].txHash === manifest.txs[0].txHash, 'new device resolves actual transaction location from recovery batch')
+  const retrieved = await retrieveFile(api, recovered)
+  const decrypted = await decryptFileBytes(retrieved.bytes, recovered.encryption, null, async () => 'offline recovery fixture')
+  ok(retrieved.sha256Match && await sha256Hex(decrypted) === await sha256Hex(plain), 'multi-node ciphertext recovers and decrypts with matching plaintext hash')
+
+  // Old manifest JSON remains readable by the same entry point.
+  const legacy = { ...manifest }
+  delete legacy.recovery
+  const oldDocument = await pubM.prepareUpload(new File([JSON.stringify(legacy)], 'legacy.manifest.json'))
+  const oldScenario = makeScenario()
+  const oldApi = mockApi(oldScenario)
+  await publishPrepared(oldApi, oldDocument, signer, onStage, {}, { ...FAST, persist: false })
+  const oldRecovered = await recoverManifestFromHint(oldApi, oldDocument.rootCid, HEAD)
+  ok(oldRecovered.rootCid === legacy.rootCid && !oldRecovered.recovery, 'legacy on-chain manifest remains recoverable')
+
+  // A lost submission response leaves all recovery metadata in the pre-broadcast task.
+  const lostScenario = makeScenario('lost-response')
+  const lostApi = combinedApi(lostScenario)
+  await assert.rejects(publishPrepared(lostApi, content, signer, onStage, overrides, { ...FAST, recovery }), TxResultUnknownError)
+  const pending = (await listPendingPublish()).find((r) => r.rootCid === content.rootCid)
+  ok(pending?.recovery?.manifestCid === recovery.rootCid && pending.txNodes[0] === content.nodes.length + recovery.nodes.length, 'unknown submission persists both DAG plans before broadcasting')
+  lostScenario.chain.push(pending.txHashes[0])
+  lostScenario.headStep = 1
+  const resumed = await verifyPublishTask(lostApi, pending, { depth: 1, timeoutMs: 800, pollMs: 1 })
+  ok(resumed?.recovery?.manifestCid === recovery.rootCid && lostScenario.submits.length === 1, 'interrupted combined upload resumes without a second payment or signature')
+
+  // Recovery nodes must not be borrowed from a different transaction in the same block.
+  const wholeTx = txRegistry.get(pending.txHashes[0])
+  const originalCalls = [...wholeTx.method.args[0]]
+  const recoveryCalls = originalCalls.splice(content.nodes.length)
+  wholeTx.method.args[0] = originalCalls
+  wholeTx.args = [originalCalls]
+  const otherTx = lostApi.tx.utility.batchAll(recoveryCalls.map((method) => ({ method })))
+  lostScenario.chain.push(otherTx.hash.toHex())
+  await storeM.putPublishTask(pending)
+  ok(await verifyPublishTask(lostApi, pending, { depth: 1, timeoutMs: 800, pollMs: 1 }) === null, 'combined verification rejects recovery nodes from another transaction')
+  await assert.rejects(recoverManifestFromHint(lostApi, recovery.rootCid, HEAD))
+  ok(true, 'new-device recovery rejects a recovery-only transaction')
+  const validCopy = lostApi.tx.utility.batchAll([...originalCalls, ...recoveryCalls].map((method) => ({ method })))
+  lostScenario.chain.push(validCopy.hash.toHex())
+  const afterIncompleteCopy = await recoverManifestFromHint(lostApi, recovery.rootCid, HEAD)
+  ok(afterIncompleteCopy.txs[0].txHash === validCopy.hash.toHex(), 'recovery skips incomplete copies and finds the complete same-block batch')
+  await dismissPendingPublish(pending)
+
+  const rejected = makeScenario('too-large')
+  await assert.rejects(publishPrepared(combinedApi(rejected), content, signer, onStage, overrides, { ...FAST, recovery }), TxRejectedError)
+  ok(rejected.submits.length === 1, 'combined capacity rejection never falls back to multiple paid transactions')
+  const rejectedTask = (await listPendingPublish()).find((r) => r.rootCid === content.rootCid)
+  await dismissPendingPublish(rejectedTask)
+
+  // Explicit abort between confirmation and local completion preserves the signed task.
+  const storageScenario = makeScenario()
+  const storageApi = combinedApi(storageScenario)
+  const originalTransaction = IDBDatabase.prototype.transaction
+  IDBDatabase.prototype.transaction = function (stores, ...args) {
+    const tx = originalTransaction.call(this, stores, ...args)
+    if (Array.isArray(stores) && stores.includes('manifests') && stores.includes('tasks')) queueMicrotask(() => tx.abort())
+    return tx
+  }
+  try {
+    await assert.rejects(publishPrepared(storageApi, content, signer, onStage, overrides, { ...FAST, recovery }))
+  } finally { IDBDatabase.prototype.transaction = originalTransaction }
+  const abortedTask = (await listPendingPublish()).find((r) => r.rootCid === content.rootCid)
+  ok(abortedTask?.recovery?.manifestCid === recovery.rootCid, 'aborted final local transaction retains the recovery task')
+  storageScenario.headStep = 1
+  const afterAbort = await verifyPublishTask(storageApi, abortedTask, { depth: 1, timeoutMs: 800, pollMs: 1 })
+  ok(afterAbort?.recovery?.manifestCid === recovery.rootCid && storageScenario.submits.length === 1, 'local persistence failure can be repaired without another broadcast')
+}
+
+// A late signature after timeout must not resume persistence or broadcast.
+{
+  const scenario = { submits: [], chain: [], remarkCalls: 0, remarkHashes: [] }
+  const api = mockApi(scenario)
+  let release
+  const original = api.tx.utility.batch
+  api.tx.utility.batch = (...args) => {
+    const tx = original(...args)
+    tx.signAsync = () => new Promise(resolve => { release = resolve })
+    return tx
+  }
+  await assert.rejects(publishPrepared(api, prepared(1), signer, onStage, {}, { walletTimeoutMs: 10 }), /walletSteps.signTimeout|timed out|超时/)
+  release()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  ok(scenario.submits.length === 0, 'late wallet signature after timeout never broadcasts')
+}
+
 console.log(`\nAll ${passed} assertions passed ✓ (publish-error-test)`)
 process.exit(0)

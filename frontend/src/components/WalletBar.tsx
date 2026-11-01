@@ -1,5 +1,6 @@
+import { WalletBalance } from './WalletBalance'
 // Wallet bar: the two signer stacks connect independently.
-//  Autonomys Consensus — extension wallet (auto-wallet: Talisman / SubWallet /
+//  Autonomys Consensus — extension wallet (Substrate injection: Talisman / SubWallet /
 //              Polkadot.js, production path) or local key (dev / acceptance
 //              path; the mnemonic is kept in memory only and is lost on refresh)
 //  Auto EVM —   injected browser wallet (EIP-6963 multi-wallet discovery:
@@ -9,8 +10,7 @@
 // wallet's display name.
 
 import { useEffect, useState } from 'react'
-import { useWallet } from '@autonomys/auto-wallet-react'
-import type { Signer } from '@polkadot/api/types'
+import { useConsensusWallet } from '../consensus-wallet-context'
 import { useSigner } from '../signer-context'
 import { ChainTag } from './ChainTag'
 import { createLocalSigner } from '../lib/wallet/local-keyring'
@@ -20,8 +20,8 @@ import { AUTO_EVM_CHAIN_ID } from '../lib/evm'
 import { t } from '../i18n'
 
 export function WalletBar() {
-  const wallet = useWallet()
-  const { setActive, evm, setEvm } = useSigner()
+  const wallet = useConsensusWallet()
+  const { active, setActive, evm, setEvm } = useSigner()
   const [mode, setMode] = useState<'extension' | 'local' | null>(null)
   const [localSigner, setLocalSigner] = useState<Awaited<ReturnType<typeof createLocalSigner>> | null>(null)
   const [mnemonic, setMnemonic] = useState('')
@@ -47,16 +47,13 @@ export function WalletBar() {
 
   // Derive the active signer: the user-selected mode wins; clear it if its source becomes invalid
   useEffect(() => {
-    if (mode === 'extension') {
+    if (mode === 'extension' || (mode === null && wallet.isConnected)) {
       const acc = wallet.selectedAccount
       if (wallet.isConnected && acc && wallet.injector?.signer) {
         setActive({
           kind: 'extension',
           address: acc.address,
-          // extension-inject bundles its own copy of @polkadot/types: the Signer
-          // interfaces are structurally identical but nominally distinct types,
-          // fully compatible at runtime — cast to the api-side type
-          signer: wallet.injector.signer as Signer,
+          signer: wallet.injector.signer,
           label: wallet.selectedWallet ?? 'extension',
         })
         return
@@ -136,7 +133,7 @@ export function WalletBar() {
         {/* chain color rule: consensus = teal, EVM = violet — the ChainTag is
             the title (chain names directly; the redundant bottom strip is gone) */}
         <div className="wallet-section-title">
-          <ChainTag chain="consensus" /> {t('wallet.chainConsensus')}
+          <ChainTag chain="consensus" />
         </div>
         {!wallet.isConnected ? (
           wallet.availableWallets.length === 0 ? (
@@ -144,7 +141,7 @@ export function WalletBar() {
           ) : (
             <div className="wallet-buttons">
               {wallet.availableWallets.map((w) => (
-                <button key={w.extensionName} className="btn ghost small" onClick={() => wallet.connectWallet(w.extensionName)}>
+                <button key={w.extensionName} className="btn ghost small" disabled={wallet.isLoading} onClick={() => { setMode('extension'); void wallet.connectWallet(w.extensionName) }}>
                   {w.title}
                 </button>
               ))}
@@ -171,12 +168,13 @@ export function WalletBar() {
             </button>
           </div>
         )}
+        <WalletBalance chain="consensus" address={active?.address} />
         {wallet.connectionError && <div className="error-text">{wallet.connectionError}</div>}
       </div>
 
       <div className="wallet-section">
         <div className="wallet-section-title">
-          <ChainTag chain="evm" /> {t('wallet.chainEvm')}
+          <ChainTag chain="evm" />
         </div>
         {evm ? (
           <div className="wallet-connected">
@@ -204,6 +202,7 @@ export function WalletBar() {
             ))}
           </div>
         )}
+        <WalletBalance chain="evm" address={evm?.address} />
         {evmError && <div className="error-text">{evmError}</div>}
         {evmChainMismatch && <div className="error-text">{t('errors.evmChainMismatch', [String(evm?.chainId ?? '')])}</div>}
       </div>

@@ -55,6 +55,12 @@ const collectRemarkNodes = (calls: unknown[], found: Map<string, Uint8Array>): v
 }
 
 // All system.remark nodes within one block (incl. utility.batch inner calls)
+export function remarkNodesFromExtrinsic(extrinsic: unknown): Map<string, Uint8Array> {
+  const found = new Map<string, Uint8Array>()
+  collectRemarkNodes([extrinsic], found)
+  return found
+}
+
 export async function extractRemarkNodes(api: ApiPromise, blockHash: string): Promise<ExtractResult> {
   const block = await api.rpc.chain.getBlock(blockHash)
   const found = new Map<string, Uint8Array>()

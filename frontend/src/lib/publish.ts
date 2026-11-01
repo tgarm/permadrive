@@ -28,6 +28,7 @@ import type { SubmittableExtrinsic } from '@polkadot/api/types'
 import {
   TxRejectedError,
   extractRemarkNodes,
+  remarkNodesFromExtrinsic,
   findInclusionByHash,
   submitAndWaitConfirmed,
   waitInclusionConfirmed,
@@ -73,7 +74,17 @@ export async function estimateFee(api: ApiPromise, totalBytes: number): Promise<
   return { shannons, ai3: Number(shannons) / 1e18 }
 }
 
-export type PublishStage = 'signing' | 'submitting' | 'submitted' | 'scanning' | 'confirming'
+/** A late wallet result must never resume the broadcast path after timeout. */
+async function beforeBroadcastDeadline<T>(operation: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([operation, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms)
+    })])
+  } finally { clearTimeout(timer) }
+}
+
+export type PublishStage = 'preparing-wallet' | 'signing' | 'submitting' | 'submitted' | 'scanning' | 'confirming'
 
 // Degrade to per-tx only on the node's definitive capacity/format rejection of
 // the batch, with no "may have been received" semantics. banned / not found /
@@ -100,18 +111,18 @@ export async function publishPrepared(
   signer: SubstrateSigner,
   onStage: (stage: PublishStage, detail?: string) => void,
   overrides: PublishOverrides = {},
-  opts: { scanTimeoutMs?: number; confirmTimeoutMs?: number; depth?: number; persist?: boolean } = {},
+  opts: { scanTimeoutMs?: number; confirmTimeoutMs?: number; depth?: number; walletTimeoutMs?: number; persist?: boolean; recovery?: PreparedUpload; confirmTransaction?: (submit: () => Promise<Inclusion>) => Promise<Inclusion>; beforeSign?: () => Promise<void> } = {},
 ): Promise<Manifest> {
   const remarkTxs = (): SubmittableExtrinsic<'promise'>[] =>
-    prepared.nodes.map((n) => api.tx.system.remark(makeRemarkPayload(n.bytes)))
+    [...prepared.nodes, ...(opts.recovery?.nodes ?? [])].map((n) => api.tx.system.remark(makeRemarkPayload(n.bytes)))
 
   const taskId = `publish:${prepared.rootCid}`
   const persist = opts.persist ?? true
   // F03: the chain name is captured once at publish start and stored in the
   // task — rebuilding the manifest after confirmation no longer depends on a
   // trailing network call deciding whether credentials survive
-  const chainName = (await api.rpc.system.chain()).toString()
-  const startHeight = (await api.rpc.chain.getHeader()).number.toNumber()
+  const chainName = (await beforeBroadcastDeadline(api.rpc.system.chain(), 90_000, t('walletSteps.rpcTimeout'))).toString()
+  const startHeight = (await beforeBroadcastDeadline(api.rpc.chain.getHeader(), 90_000, t('walletSteps.rpcTimeout'))).number.toNumber()
   const task = (txHashes: string[], txNodes: number[], status: PublishTaskRecord['status'], lastError: string | null): PublishTaskRecord => ({
     id: taskId,
     kind: 'publish',
@@ -120,7 +131,8 @@ export async function publishPrepared(
     overridesFile: overrides.file ? { ...overrides.file } : null,
     encryption: overrides.encryption ?? null,
     nodes: prepared.nodes.map((n) => ({ cid: n.cid, blake3: n.blake3, bytes: n.bytes.length })),
-    totalBytes: prepared.totalBytes,
+    ...(opts.recovery ? { recovery: { manifestCid: opts.recovery.rootCid, nodes: opts.recovery.nodes.map((n) => ({ cid: n.cid, blake3: n.blake3, bytes: n.bytes.length })) } } : {}),
+    totalBytes: prepared.totalBytes + (opts.recovery?.totalBytes ?? 0),
     startHeight,
     txHashes,
     txNodes,
@@ -139,30 +151,37 @@ export async function publishPrepared(
     currentNodes: number[],
     nodeCount: number,
   ): Promise<Inclusion> => {
-    onStage('signing')
-    // Autonomys nonce semantics: accountNextIndex returning a huge value (about
-    // the chain height) is normal — sign with it directly (same as the official backend)
-    const nonce = (await api.rpc.system.accountNextIndex(signer.address)).toNumber()
-    // local signers sign with the KeyringPair (payload built by api.registry);
-    // extension signers go through Signer.signPayload inside the wallet
-    if (signer.pair) await tx.signAsync(signer.pair, { nonce })
-    else await tx.signAsync(signer.address, { signer: signer.signer!, nonce })
-    // persist the task after signing, before submitting — from this moment a
-    // "result unknown" is verifiable and recoverable; txNodes (aligned with
-    // txHashes) records how many nodes each tx carries (F02)
-    await putPublishTask(task([...currentHashes, tx.hash.toHex()], [...currentNodes, nodeCount], 'pending-verify', null))
-    return submitAndWaitConfirmed(api, tx, { ...opts, onStage: (s) => onStage(s as PublishStage) })
+    const submit = async () => {
+      await opts.beforeSign?.()
+      onStage('preparing-wallet')
+      // Autonomys nonce semantics: accountNextIndex returning a huge value (about
+      // the chain height) is normal — sign with it directly (same as the official backend)
+      const nonce = (await beforeBroadcastDeadline(api.rpc.system.accountNextIndex(signer.address), 90_000, t('walletSteps.rpcTimeout'))).toNumber()
+      onStage('signing')
+      // local signers sign with the KeyringPair (payload built by api.registry);
+      // extension signers go through Signer.signPayload inside the wallet
+      await beforeBroadcastDeadline(signer.pair
+        ? tx.signAsync(signer.pair, { nonce })
+        : tx.signAsync(signer.address, { signer: signer.signer!, nonce }),
+        opts.walletTimeoutMs ?? 180_000, t('walletSteps.signTimeout'))
+      // persist the task after signing, before submitting — from this moment a
+      // "result unknown" is verifiable and recoverable; txNodes (aligned with
+      // txHashes) records how many nodes each tx carries (F02)
+      await putPublishTask(task([...currentHashes, tx.hash.toHex()], [...currentNodes, nodeCount], 'pending-verify', null))
+      return submitAndWaitConfirmed(api, tx, { ...opts, onStage: (s) => onStage(s as PublishStage) })
+    }
+    return opts.confirmTransaction ? opts.confirmTransaction(submit) : submit()
   }
 
   const inclusions: Inclusion[] = []
   try {
-    const batch = api.tx.utility.batch(remarkTxs())
-    inclusions.push(await submitTx(batch, [], [], prepared.nodes.length))
+    const batch = opts.recovery ? api.tx.utility.batchAll(remarkTxs()) : api.tx.utility.batch(remarkTxs())
+    inclusions.push(await submitTx(batch, [], [], prepared.nodes.length + (opts.recovery?.nodes.length ?? 0)))
   } catch (e) {
     const message = (e as Error).message ?? ''
     const rejected = e instanceof TxRejectedError
     const capacityReject = rejected && BATCH_CAPACITY_RE.test(message) && !MAYBE_RECEIVED_RE.test(message)
-    if (!capacityReject) {
+    if (opts.recovery || !capacityReject) {
       // pending verification (submitted but timed out / lost response / confirm
       // failed) or another definitive rejection (banned etc.): the task is
       // persisted — rescan by hash; never degrade and resend
@@ -182,6 +201,7 @@ export async function publishPrepared(
   // persist it in the same transaction that deletes the task — if persistence
   // fails the task stays pending-verify and no credential is lost
   const manifest: Manifest = {
+    ...(opts.recovery ? { recovery: { manifestCid: opts.recovery.rootCid } } : {}),
     version: 2, // new publishes are v2 from here (encryption null = plain upload, a v1 superset)
     network: /mainnet/i.test(chainName) ? 'mainnet' : chainName,
     rootCid: prepared.rootCid,
@@ -227,10 +247,15 @@ export async function verifyPublishTask(
   // F02: incomplete plan (per-tx signing/submitting stopped partway) → the
   // missing nodes were never submitted by this task, so it cannot complete
   // (a same-content republish lands its own manifest via its own path)
+  const expectedNodes = [...record.nodes, ...(record.recovery?.nodes ?? [])]
+  if (record.recovery && record.txHashes.length !== 1) {
+    await markTaskError(record, t('errors.recoveryBatchIncomplete'))
+    return null
+  }
   if (record.txNodes) {
     const planned = record.txNodes.reduce((a, b) => a + b, 0)
-    if (record.txHashes.length !== record.txNodes.length || planned !== record.nodes.length) {
-      const missing = Math.max(0, record.nodes.length - planned)
+    if (record.txHashes.length !== record.txNodes.length || planned !== expectedNodes.length) {
+      const missing = Math.max(0, expectedNodes.length - planned)
       await markTaskError(record, t('publishPending.incomplete', [String(missing)]))
       return null
     }
@@ -250,12 +275,18 @@ export async function verifyPublishTask(
   // reliable check.
   const found = new Map<string, Uint8Array>()
   for (const inclusion of inclusions) {
-    const { found: blockNodes } = await extractRemarkNodes(api, inclusion.blockHash)
-    for (const [cid, payload] of blockNodes) found.set(cid, payload)
+    if (record.recovery) {
+      const block = await api.rpc.chain.getBlock(inclusion.blockHash)
+      const extrinsic = block.block.extrinsics.find((ex) => ex.hash.toHex() === inclusion.txHash)
+      if (extrinsic) for (const [cid, payload] of remarkNodesFromExtrinsic(extrinsic)) found.set(cid, payload)
+    } else {
+      const { found: blockNodes } = await extractRemarkNodes(api, inclusion.blockHash)
+      for (const [cid, payload] of blockNodes) found.set(cid, payload)
+    }
   }
-  const missing = record.nodes.filter((n) => !found.has(n.cid))
+  const missing = expectedNodes.filter((n) => !found.has(n.cid))
   if (missing.length > 0) {
-    await markTaskError(record, t('publishPending.coverageGap', [String(missing.length), String(record.nodes.length)]))
+    await markTaskError(record, t('publishPending.coverageGap', [String(missing.length), String(expectedNodes.length)]))
     return null
   }
   // F03: network/uploader come from values captured in the task (legacy tasks
@@ -263,6 +294,7 @@ export async function verifyPublishTask(
   // in one transaction — a failed write keeps the task, so credentials survive
   const chainName = record.network ?? (await api.rpc.system.chain()).toString()
   const manifest: Manifest = {
+    ...(record.recovery ? { recovery: { manifestCid: record.recovery.manifestCid } } : {}),
     version: 2,
     network: /mainnet/i.test(chainName) ? 'mainnet' : chainName,
     rootCid: record.rootCid,
