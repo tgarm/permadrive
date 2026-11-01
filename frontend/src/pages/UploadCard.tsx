@@ -27,7 +27,11 @@ import type { Manifest } from '../lib/manifest'
 import { stampFileOwner } from '../lib/fileOwnership'
 import { nodeCount, t, useI18n } from '../i18n'
 
-const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 // per-file cap; larger files need chunking (a later version)
+// Per-file cap = the single-signature tier: 8 MiB = 128×64 KiB nodes; the batch
+// extrinsic encodes to ~8.4 MB, safely under the measured 10 MiB per-extrinsic
+// ceiling (a full 10 MiB file would graze it). Larger files need multi-batch
+// publishing with resume (planned desktop/CLI roadmap).
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 
 interface UploadSession {
   fileName: string
