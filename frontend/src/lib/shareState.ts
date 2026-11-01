@@ -54,7 +54,7 @@ export async function deriveShareInfo(
 
   try {
     const published = publicPublisherActive() ? await fetchPublishedByKey(manifestCid) : null
-    if (published) return { ...base, kind: 'public', manifestCid, height }
+    if (published) return { ...base, kind: 'public', disclosureAttempted: false, manifestCid, height }
     if (disclosureAttempted) return { ...base, kind: 'public', manifestCid, height } // public (unconfirmed)
     const listing = opts.owner && salesActive() ? await getListingSales(opts.owner, manifestCid) : null
     if (listing && listing.price > 0n) return { ...base, kind: 'paid', manifestCid, height }
