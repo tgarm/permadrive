@@ -28,7 +28,24 @@ async function noWalletPrompts(page) {
   expect(methods.filter((m) => !['eth_accounts', 'eth_chainId'].includes(m))).toEqual([])
 }
 
-test('first-use guide stays honest with an empty library and no wallet', async ({ page }) => {
+async function connectedDirectory(page) {
+  await page.route('**/src/signer-context.tsx', r => r.fulfill({contentType:'text/javascript',body:`export const SignerProvider=({children})=>children;const noop=()=>{};export const useSigner=()=>({active:null,evm:{kind:'injected',address:'0x${'11'.repeat(20)}',chainId:870},setActive:noop,setEvm:noop});`}))
+  const source = await readFile(new URL('../../../frontend/src/lib/registry.ts', import.meta.url), 'utf8')
+  const names = [...source.matchAll(/export (?:async )?(?:function|const) (\w+)/g)].map(m=>m[1])
+  await page.route('**/src/lib/registry.ts', r => r.fulfill({contentType:'text/javascript',body:names.map(n=>`export const ${n}=${n==='getEvmBalance'?'async()=>0n':'async()=>[]'};`).join('\n')}))
+}
+
+test('disconnected files page shows only the directory connection prompt', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByTestId('files-wallet-required')).toBeVisible()
+  await expect(page.getByTestId('first-use-guide')).toHaveCount(0)
+  await expect(page.locator('input[type=file]')).toHaveCount(0)
+  await expect(page.locator('.files-table')).toHaveCount(0)
+  await noWalletPrompts(page)
+})
+
+test('first-use guide stays honest with an empty library and a directory account', async ({ page }) => {
+  await connectedDirectory(page)
   await page.goto('/')
   const guide = page.getByTestId('first-use-guide')
   await expect(guide).toBeVisible()
@@ -134,6 +151,7 @@ test('fee estimate is hidden without a wallet and a selected file', async ({ pag
 })
 
 test('unfinished directory reminder survives reload without resubmitting an upload', async ({ page }) => {
+  await connectedDirectory(page)
   await page.goto('/')
   await page.evaluate(async () => {
     const store = await import('/src/lib/store.ts')
@@ -145,7 +163,7 @@ test('unfinished directory reminder survives reload without resubmitting an uplo
   const row = page.locator('tr').filter({hasText:'pending-backup.txt'})
   await expect(row.getByRole('img', {name:'Incomplete · index pending',exact:true})).toBeVisible()
   await expect(page.getByTestId('first-use-guide')).toHaveCount(0)
-  await expect(row.getByRole('button', {name:'Continue saving file',exact:true})).toBeDisabled()
+  await expect(row.getByRole('button', {name:'Continue saving file',exact:true})).toBeEnabled()
   await expect(row.getByRole('button', {name:'Download',exact:true})).toHaveCount(0)
   const hash = row.getByRole('button', {name:/000000000000…00000000/})
   await expect(hash).toBeVisible()

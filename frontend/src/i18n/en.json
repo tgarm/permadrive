@@ -183,7 +183,8 @@
     "details": "Details",
     "storageTransaction": "Storage transaction",
     "indexDetails": "File index",
-    "lastResult": "Latest result"
+    "lastResult": "Latest result",
+    "connectDirectory": "Connect your Auto-EVM directory account above to view and save files."
   },
   "notes": {
     "title": "Notes",

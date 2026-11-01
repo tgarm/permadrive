@@ -9,6 +9,7 @@
 // unshared; only a rejected signature (nothing broadcast) clears the marker
 // and keeps the prior state. "Copy public link" is itself a disclosure.
 
+import { deriveShareInfo, type ShareInfo } from '../lib/shareState'
 import { useCallback, useEffect, useState } from 'react'
 import { useChain } from '../chain-context'
 import { useSigner } from '../signer-context'
@@ -26,10 +27,6 @@ import {
 } from '../lib/sales'
 import {
   DUST_PRICE,
-  fetchPublishedByKey,
-  hasDisclosureAttempted,
-  hasEverDisclosed,
-  hasEverSold,
   keyHex,
   markDisclosureAttempted,
   markEverDisclosed,
@@ -58,6 +55,7 @@ const isUserRejected = (e: unknown): boolean => {
 }
 
 export interface SharePanelProps {
+  initialShareInfo?: ShareInfo
   manifest: Manifest
   registryRecord: RegistryRecord | null
   getPassphrase: () => Promise<string | null>
@@ -74,7 +72,7 @@ type Phase =
   | { kind: 'publicUnconfirmed'; manifestCid: string | null; height: number | null; detail: string }
   | { kind: 'needManifest' } // encrypted file whose manifest is not on the DSN yet — share prerequisite missing
 
-export function SharePanel({ manifest, registryRecord, getPassphrase, onNotice, onChanged }: SharePanelProps) {
+export function SharePanel({ initialShareInfo, manifest, registryRecord, getPassphrase, onNotice, onChanged }: SharePanelProps) {
   const { t } = useI18n()
   const { connect } = useChain()
   const { active: activeSigner, evm } = useSigner()
@@ -101,51 +99,35 @@ export function SharePanel({ manifest, registryRecord, getPassphrase, onNotice, 
     [onNotice],
   )
 
+  const applyInfo = useCallback((info: ShareInfo) => {
+    setEverSold(info.everSold)
+    setEverDisclosed(info.everDisclosed)
+    const { manifestCid, height } = info
+    if (info.kind === 'plain') setPhase({ kind: 'plain' })
+    else if (!manifestCid) setPhase({ kind: 'needManifest' })
+    else if (info.kind === 'public') setPhase(info.disclosureAttempted
+      ? { kind: 'publicUnconfirmed', manifestCid, height, detail: '' }
+      : { kind: 'public', manifestCid, height, keyFromEvent: info.publicKey })
+    else if (info.kind === 'paid' && info.listing) setPhase({ kind: 'paid', manifestCid, height, listing: info.listing })
+    else setPhase({ kind: 'unshared', manifestCid, height })
+  }, [])
   const refresh = useCallback(async () => {
-    setEverSold(await hasEverSold(manifest.rootCid))
-    setEverDisclosed(await hasEverDisclosed(manifest.rootCid))
-    const attempted = await hasDisclosureAttempted(manifest.rootCid)
-    const metaPub = await getManifestPublishMeta(manifest.rootCid)
-    const manifestCid = registryRecord?.manifestCid ?? metaPub?.manifestCid ?? null
-    const height = registryRecord?.height ?? metaPub?.height ?? null
-    if (manifest.encryption == null) {
-      setPhase({ kind: 'plain' })
-      return
-    }
-    if (!manifestCid) {
-      setPhase({ kind: 'needManifest' })
-      return
-    }
-    try {
-      const published = publicPublisherActive() ? await fetchPublishedByKey(manifestCid) : null
-      if (published) {
-        setPhase({ kind: 'public', manifestCid, height, keyFromEvent: published.key })
-        setPending(publicPublisherActive() && evm ? await fetchSellerOrdersSales(evm.address).then((rows) => rows.filter((r) => r.entry?.manifestCid === manifestCid)) : [])
-        return
-      }
-      if (attempted) {
-        // Broadcast happened but no event visible — public (unconfirmed),
-        // never falls back to unshared
-        setPhase({ kind: 'publicUnconfirmed', manifestCid, height, detail: '' })
-        return
-      }
-      const listing = evm ? await getListingSales(evm.address, manifestCid) : null
-      if (listing && listing.price > 0n) {
-        setPhase({ kind: 'paid', manifestCid, height, listing })
-        setPending(evm ? await fetchSellerOrdersSales(evm.address).then((rows) => rows.filter((r) => r.entry?.manifestCid === manifestCid)) : [])
-        return
-      }
-      setPhase({ kind: 'unshared', manifestCid, height })
-    } catch {
-      // Derivation failure renders as unshared (never impersonates public;
-      // reopening the panel retries)
-      setPhase({ kind: 'unshared', manifestCid, height })
-    }
-  }, [manifest, registryRecord, evm])
-
+    applyInfo(await deriveShareInfo(manifest, { owner: evm?.address ?? null, registryRecord }))
+  }, [manifest, registryRecord, evm, applyInfo])
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    if (initialShareInfo) applyInfo(initialShareInfo)
+  }, [initialShareInfo, applyInfo])
+  useEffect(() => {
+    let current = true
+    setPending([])
+    if (evm && (phase.kind === 'paid' || phase.kind === 'public')) {
+      const cid = phase.manifestCid
+      void fetchSellerOrdersSales(evm.address).then(rows => {
+        if (current) setPending(rows.filter(row => row.entry?.manifestCid === cid))
+      }).catch(() => {})
+    }
+    return () => { current = false }
+  }, [evm, phase.kind, 'manifestCid' in phase ? phase.manifestCid : null])
 
   // ---- Put the manifest itself on the DSN (share prerequisite; Registry
   // registration stays optional and is NOT done here) ----

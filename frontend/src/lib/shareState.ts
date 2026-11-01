@@ -14,7 +14,7 @@
 //    = public (unconfirmed), never unshared — the caller renders the marker
 
 import { fetchPublishedByKey, hasDisclosureAttempted, hasEverDisclosed, hasEverSold, publicPublisherActive } from './publicPublisher.ts'
-import { getListingSales, salesActive } from './sales.ts'
+import { getListingSales, salesActive, type ListingView } from './sales.ts'
 import { getManifestPublishMeta } from './manifestPublish.ts'
 import type { Manifest } from './manifest.ts'
 import type { RegistryRecord } from './store.ts'
@@ -22,6 +22,8 @@ import type { RegistryRecord } from './store.ts'
 export type ShareKind = 'plain' | 'unshared' | 'paid' | 'public'
 
 export interface ShareInfo {
+  listing?: ListingView
+  publicKey?: string
   kind: ShareKind
   /** The signature was handed to the wallet (a broadcast attempt happened) but
    *  no event is visible yet — the UI shows "public (unconfirmed)" */
@@ -54,10 +56,10 @@ export async function deriveShareInfo(
 
   try {
     const published = publicPublisherActive() ? await fetchPublishedByKey(manifestCid) : null
-    if (published) return { ...base, kind: 'public', disclosureAttempted: false, manifestCid, height }
+    if (published) return { ...base, kind: 'public', publicKey: published.key, disclosureAttempted: false, manifestCid, height }
     if (disclosureAttempted) return { ...base, kind: 'public', manifestCid, height } // public (unconfirmed)
     const listing = opts.owner && salesActive() ? await getListingSales(opts.owner, manifestCid) : null
-    if (listing && listing.price > 0n) return { ...base, kind: 'paid', manifestCid, height }
+    if (listing && listing.price > 0n) return { ...base, kind: 'paid', listing, manifestCid, height }
   } catch {
     /* Derivation failure renders as unshared (never impersonates public; refresh retries) */
   }

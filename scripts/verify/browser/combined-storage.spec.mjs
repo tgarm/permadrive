@@ -56,7 +56,7 @@ async function storageFixture(page) {
     }`,
   })
   await stub('publicPublisher.ts', { DUST_PRICE: '10000000000000n', publicPublisherActive: '()=>false' })
-  await stub('sales.ts', { salesActive: '()=>false' })
+  await stub('sales.ts', { salesActive: '()=>true', getListingSales: 'async()=>{window.__listingReads=(window.__listingReads||0)+1;return null}' })
   await route('**/src/lib/indexer.ts', 'export class IndexerClient{async pollUntilIndexed(hashes){return {found:new Map(hashes.map(h=>[h,{}])),pending:[]}}close(){}}')
   await page.route(/^https?:\/\/(?!127\.0\.0\.1|localhost)/, (r) => r.abort())
 }
@@ -198,4 +198,19 @@ test('resume exposes a stalled preflight and ignores its late result', async ({ 
   expect(await page.evaluate(() => Number(localStorage.getItem('registerCalls')))).toBe(0)
   expect(events.some(message => message.includes('fee: start'))).toBe(true)
   expect(events.some(message => message.includes('fee: stopped'))).toBe(true)
+})
+
+
+test('opening file sharing reuses the list status without another listing query', async ({ page }) => {
+  await storageFixture(page)
+  const gate = await uploadToDirectoryGate(page)
+  await gate.getByRole('button', {name:'Pay and register file directory',exact:true}).click()
+  const row = page.locator('tr').filter({hasText:'combined-browser.txt'})
+  await expect(row.getByRole('img', {name:'Complete',exact:true})).toBeVisible()
+  await expect(row.getByRole('img', {name:'Unshared',exact:true})).toBeVisible()
+  const before = await page.evaluate(() => window.__listingReads)
+  await row.getByRole('button', {name:'Share',exact:true}).click()
+  await expect(page.locator('.share-panel')).toBeVisible()
+  await expect(page.locator('.share-panel').getByRole('button', {name:'List for sale',exact:true})).toBeVisible()
+  expect(await page.evaluate(() => window.__listingReads)).toBe(before)
 })

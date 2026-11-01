@@ -183,7 +183,8 @@
     "details": "详情",
     "storageTransaction": "存储交易",
     "indexDetails": "文件索引",
-    "lastResult": "最近结果"
+    "lastResult": "最近结果",
+    "connectDirectory": "请先在顶部连接 Auto-EVM 目录账户，连接后即可查看和保存文件。"
   },
   "notes": {
     "title": "笔记",

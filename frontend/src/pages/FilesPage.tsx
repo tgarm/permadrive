@@ -62,6 +62,12 @@ import { useI18n } from '../i18n'
 type RowBusy = Record<string, string>
 
 export function FilesPage() {
+  const { evm } = useSigner()
+  const { t } = useI18n()
+  return evm ? <ConnectedFilesPage key={evm.address.toLowerCase()} /> : <section className="card" data-testid="files-wallet-required"><p>{t('files.connectDirectory')}</p></section>
+}
+
+function ConnectedFilesPage() {
   const { t } = useI18n()
   const { connect } = useChain()
   const { active: activeSigner, evm: evmSigner } = useSigner()
@@ -512,9 +518,10 @@ export function FilesPage() {
       {sharePanelRoot &&
         (() => {
           const manifest = manifests.find((m) => m.rootCid === sharePanelRoot)
-          if (!manifest) return null
+          if (!manifest || !shareInfos.has(manifest.rootCid)) return null
           return (
             <SharePanel
+              initialShareInfo={shareInfos.get(manifest.rootCid)}
               manifest={manifest}
               registryRecord={registryRecords.find((r) => r.rootCid === sharePanelRoot) ?? null}
               getPassphrase={openPassphrasePrompt}
