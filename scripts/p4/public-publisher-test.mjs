@@ -4,18 +4,20 @@
 //   p01 non-seller call reverts (NotListingSeller)
 //   p02 listingId mismatch reverts (ListingMismatch)
 //   p03 publish on an unlisted file -> the purchase backstop reverts (NotListed)
-//   p04 value != 1 wei reverts (WrongValue); a listing priced != 1 wei is
-//       caught by ExactPaymentRequired / PriceTooHigh instead
+//   p04 value != DUST_PRICE reverts (WrongValue); a listing priced
+//       != DUST_PRICE is caught by ExactPaymentRequired / PriceTooHigh instead
 //   p05 stale revision reverts (NotCurrentRevision)
 //   p06 key length != 32 reverts (BadKeyLength)
 //   p07 manifestCid over 128 chars reverts (CidTooLong)
 //   p08 happy path: all event fields correct + the order stored
-//       (buyer=publisher, price=1 wei) + the seller's net balance change =
-//       -gas (the 1 wei round-trips back)
-//   p09 republishing creates a second harmless order (idempotent; 1 wei back)
-//   p10 DirectSales storage untouched (regression): treasury untouched, both
-//       contract balances 0, buyerCount exactly +1, an existing high-price
-//       listing unaffected by the 1 wei one
+//       (buyer=publisher, price=DUST_PRICE) + the seller's net cost = gas +
+//       platform fee (90% of the dust returns; DUST_PRICE 1e13 = 10x the
+//       Auto-EVM domain ED, measured by bisection 2026-11-01 - the 1 wei
+//       version was rejected by the domain's recipient-side dust floor)
+//   p09 republishing creates a second harmless order (idempotent)
+//   p10 DirectSales storage untouched (regression): both contract balances 0,
+//       treasury receives exactly the platform fees, buyerCount exactly +1,
+//       an existing high-price listing unaffected by the dust-price one
 //   p11 sales() immutable readback + bytecode equality (patchImmutablesMulti)
 //       — the deploy-time check that excludes a fake sales
 // Balance assertions: treasury(A) differs from every acting signer, so native
@@ -111,6 +113,8 @@ const K1 = keccak256(toHex('file-key-one'))
 const K2 = keccak256(toHex('file-key-two'))
 const SHA1 = keccak256(toHex('plain-sha-one'))
 const SHA2 = keccak256(toHex('plain-sha-two'))
+const DUST = 10n ** 13n // DUST_PRICE (mirrors the contract constant; mainnet readback is asserted by p00)
+const FEE = (DUST * 1000n) / 10000n // platformBps defaults to 1000 -> the fee is exactly 1e12
 
 const errText = (e) => {
   const parts = []
@@ -157,7 +161,7 @@ function ok(cond, label) {
 
 // ---- Constant readback (part of the deploy-time trust-domain check) ----
 
-ok((await read('DUST_PRICE', [], PP, PUB_ADDR)) === 1n, 'p00 DUST_PRICE == 1 wei')
+ok((await read('DUST_PRICE', [], PP, PUB_ADDR)) === DUST, 'p00 DUST_PRICE == 1e13 shannon (10x domain ED)')
 ok((await read('MAX_CID_LENGTH', [], PP, PUB_ADDR)) === 128n, 'p00 MAX_CID_LENGTH == 128')
 
 // Inside the contract fileKey = keccak256(manifestCid) (derived in publish) —
@@ -165,28 +169,31 @@ ok((await read('MAX_CID_LENGTH', [], PP, PUB_ADDR)) === 128n, 'p00 MAX_CID_LENGT
 // ListingMismatch check rejects before purchase is reached
 const cidFk = (tag) => keccak256(toHex(mCid(tag)))
 
-// A normally-priced listing (for p04c: a listing priced != 1 wei is caught by the purchase backstop)
+// A normally-priced listing (for p04c: a listing priced != DUST_PRICE is caught by the purchase backstop)
 const FK_HIGH = cidFk('high')
 await write(B, 'createRevision', [FK_HIGH, 10n ** 17n, ZERO, ZERO, 0, 0, keccak256(toHex('')), 0n, '0x'])
 const LID_HIGH = lidOf(B.address, FK_HIGH)
 
-// ---- p08 setup: the seller lists the file at 1 wei (the first half of the
-// frontend's linked two-transaction action) ----
+// ---- p08 setup: the seller lists the file at the dust price (the first half
+// of the frontend's linked two-transaction action) ----
 
 const FK1 = cidFk('pub1')
-await write(B, 'createRevision', [FK1, 1n, ZERO, ZERO, 0, 0, keccak256(toHex('')), 0n, '0x'])
+await write(B, 'createRevision', [FK1, DUST, ZERO, ZERO, 0, 0, keccak256(toHex('')), 0n, '0x'])
 const LID1 = lidOf(B.address, FK1)
 const RID1 = await read('currentRevision', [LID1])
-ok(RID1 === 1n, 'setup: 1 wei listing revision=1')
+ok(RID1 === 1n, 'setup: dust listing revision=1')
 
 // ---- p08 happy path ----
 
 {
+  const treasBefore = await A.publicClient.getBalance({ address: A.address })
   const bBefore = await bal(B)
-  const rx = await write(B, 'publish', [B.address, LID1, RID1, mCid('pub1'), K1, SHA1, 1234n, 5300000n], 1n, PP, PUB_ADDR)
+  const rx = await write(B, 'publish', [B.address, LID1, RID1, mCid('pub1'), K1, SHA1, 1234n, 5300000n], DUST, PP, PUB_ADDR)
   const bAfter = await bal(B)
-  // The 1 wei round-trips: net change = -gas
-  ok(bBefore - bAfter === gasOf(rx), `p08 seller net = -gas (1 wei returned, delta=${bBefore - bAfter - gasOf(rx)})`)
+  // Fee + gas are the whole net cost; 90% of the dust returns in the same tx
+  ok(bBefore - bAfter === gasOf(rx) + FEE, `p08 seller net = gas + platform fee (90% dust returned, delta=${bBefore - bAfter - gasOf(rx) - FEE})`)
+  const treasAfter = await A.publicClient.getBalance({ address: A.address })
+  ok(treasAfter - treasBefore === FEE, 'p08 treasury delta = the platform fee (exact)')
   const evs = pubEvents(rx).filter((e) => e.eventName === 'Published')
   ok(evs.length === 1, 'p08 exactly one Published event')
   const ev = evs[0].args
@@ -203,76 +210,76 @@ ok(RID1 === 1n, 'setup: 1 wei listing revision=1')
   // The order is stored: buyer=publisher (the contract), price=1 wei
   const orderCount = await read('orderCount')
   const [orev, opr, , , , , obuyer, oseller] = await read('orderOf', [orderCount])
-  ok(opr === 1n && orev === RID1 && obuyer?.toLowerCase() === PUB_ADDR.toLowerCase() && oseller?.toLowerCase() === B.address.toLowerCase(),
-    'p08 order stored buyer=publisher · seller=B · price=1 wei')
+  ok(opr === DUST && orev === RID1 && obuyer?.toLowerCase() === PUB_ADDR.toLowerCase() && oseller?.toLowerCase() === B.address.toLowerCase(),
+    'p08 order stored buyer=publisher · seller=B · price=DUST_PRICE')
   // fileKey = keccak256(manifestCid) (same derivation as the frontend fileKeyOf)
   ok((await read('currentRevision', [LID1])) === RID1, 'p08 currentRevision stays on the 1 wei revision')
 }
 
 // ---- p01 non-seller ----
 
-await expectRevert(() => write(C, 'publish', [B.address, LID1, RID1, mCid('pub1'), K1, SHA1, 1n, 1n], 1n, PP, PUB_ADDR), 'NotListingSeller')
+await expectRevert(() => write(C, 'publish', [B.address, LID1, RID1, mCid('pub1'), K1, SHA1, 1n, 1n], DUST, PP, PUB_ADDR), 'NotListingSeller')
 ok(true, 'p01 a non-seller call reverts (NotListingSeller)')
 
 // ---- p02 listingId mismatch ----
 
 const FK_OTHER = key('other')
-await expectRevert(() => write(B, 'publish', [B.address, lidOf(B.address, FK_OTHER), RID1, mCid('pub1'), K1, SHA1, 1n, 1n], 1n, PP, PUB_ADDR), 'ListingMismatch')
+await expectRevert(() => write(B, 'publish', [B.address, lidOf(B.address, FK_OTHER), RID1, mCid('pub1'), K1, SHA1, 1n, 1n], DUST, PP, PUB_ADDR), 'ListingMismatch')
 ok(true, 'p02 a listingId mismatching (seller, keccak256(cid)) reverts (ListingMismatch)')
 
 // ---- p03 unlisted (the listingId matches but no listing exists; purchase backstop NotListed) ----
 
-await expectRevert(() => write(B, 'publish', [B.address, lidOf(B.address, cidFk('never')), 1n, mCid('never'), K2, SHA2, 1n, 1n], 1n, PP, PUB_ADDR), 'NotListed')
+await expectRevert(() => write(B, 'publish', [B.address, lidOf(B.address, cidFk('never')), 1n, mCid('never'), K2, SHA2, 1n, 1n], DUST, PP, PUB_ADDR), 'NotListed')
 ok(true, 'p03 publish on an unlisted file reverts in purchase (NotListed)')
 
 // ---- p04 value != 1 wei + a listing priced != 1 wei ----
 
-await expectRevert(() => write(B, 'publish', [B.address, LID1, RID1, mCid('pub1'), K1, SHA1, 1n, 1n], 2n, PP, PUB_ADDR), 'WrongValue')
-ok(true, 'p04a value=2 wei reverts (WrongValue)')
+await expectRevert(() => write(B, 'publish', [B.address, LID1, RID1, mCid('pub1'), K1, SHA1, 1n, 1n], DUST * 2n, PP, PUB_ADDR), 'WrongValue')
+ok(true, 'p04a value=2xDUST reverts (WrongValue)')
 await expectRevert(() => write(B, 'publish', [B.address, LID1, RID1, mCid('pub1'), K1, SHA1, 1n, 1n], 0n, PP, PUB_ADDR), 'WrongValue')
 ok(true, 'p04b value=0 reverts (WrongValue)')
 // A listing priced != 1 wei (the high-price listing): purchase's PriceTooHigh backstop
-await expectRevert(() => write(B, 'publish', [B.address, LID_HIGH, 1n, mCid('high'), K2, SHA2, 1n, 1n], 1n, PP, PUB_ADDR), 'PriceTooHigh')
+await expectRevert(() => write(B, 'publish', [B.address, LID_HIGH, 1n, mCid('high'), K2, SHA2, 1n, 1n], DUST, PP, PUB_ADDR), 'PriceTooHigh')
 ok(true, 'p04c a high-price (!=1 wei) listing publish reverts in purchase (PriceTooHigh backstop)')
 
 // ---- p05 stale revision ----
 
-// Re-pricing = a new revision (the make-public flow re-prices on top of the 1 wei listing)
+// Re-pricing = a new revision (the make-public flow re-prices on top of the dust listing)
 await write(B, 'createRevision', [FK1, 5n, ZERO, ZERO, 0, 0, keccak256(toHex('')), 0n, '0x'])
-await expectRevert(() => write(B, 'publish', [B.address, LID1, RID1, mCid('pub1'), K1, SHA1, 1n, 1n], 1n, PP, PUB_ADDR), 'NotCurrentRevision')
+await expectRevert(() => write(B, 'publish', [B.address, LID1, RID1, mCid('pub1'), K1, SHA1, 1n, 1n], DUST, PP, PUB_ADDR), 'NotCurrentRevision')
 ok(true, 'p05 a stale revision (expected=1 < current=2) reverts (NotCurrentRevision)')
-// Back to 1 wei for the later scenarios (revision 3)
-await write(B, 'createRevision', [FK1, 1n, ZERO, ZERO, 0, 0, keccak256(toHex('')), 0n, '0x'])
+// Back to the dust price for the later scenarios (revision 3)
+await write(B, 'createRevision', [FK1, DUST, ZERO, ZERO, 0, 0, keccak256(toHex('')), 0n, '0x'])
 const RID3 = await read('currentRevision', [LID1])
 
 // ---- p06 key length != 32 ----
 
-await expectRevert(() => write(B, 'publish', [B.address, LID1, RID3, mCid('pub1'), K1 + '00', SHA1, 1n, 1n], 1n, PP, PUB_ADDR), 'BadKeyLength') // 33B
-await expectRevert(() => write(B, 'publish', [B.address, LID1, RID3, mCid('pub1'), '0x1234', SHA1, 1n, 1n], 1n, PP, PUB_ADDR), 'BadKeyLength') // 2B
+await expectRevert(() => write(B, 'publish', [B.address, LID1, RID3, mCid('pub1'), K1 + '00', SHA1, 1n, 1n], DUST, PP, PUB_ADDR), 'BadKeyLength') // 33B
+await expectRevert(() => write(B, 'publish', [B.address, LID1, RID3, mCid('pub1'), '0x1234', SHA1, 1n, 1n], DUST, PP, PUB_ADDR), 'BadKeyLength') // 2B
 ok(true, 'p06 key lengths 33B/2B revert (BadKeyLength)')
 
 // ---- p07 manifestCid over 128 ----
 
 const longCid = 'b' + 'a'.repeat(128) // 129 chars
-await expectRevert(() => write(B, 'publish', [B.address, lidOf(B.address, keccak256(toHex(longCid))), RID3, longCid, K1, SHA1, 1n, 1n], 1n, PP, PUB_ADDR), 'CidTooLong')
+await expectRevert(() => write(B, 'publish', [B.address, lidOf(B.address, keccak256(toHex(longCid))), RID3, longCid, K1, SHA1, 1n, 1n], DUST, PP, PUB_ADDR), 'CidTooLong')
 ok(true, 'p07 a 129-char manifestCid reverts (CidTooLong)')
 const maxCid = 'b' + 'a'.repeat(127) // exactly 128, still valid
 const FKMAX = keccak256(toHex(maxCid))
-await write(B, 'createRevision', [FKMAX, 1n, ZERO, ZERO, 0, 0, keccak256(toHex('')), 0n, '0x'])
+await write(B, 'createRevision', [FKMAX, DUST, ZERO, ZERO, 0, 0, keccak256(toHex('')), 0n, '0x'])
 {
-  const rx = await write(B, 'publish', [B.address, lidOf(B.address, FKMAX), 1n, maxCid, K2, SHA2, 8n, 8n], 1n, PP, PUB_ADDR)
+  const rx = await write(B, 'publish', [B.address, lidOf(B.address, FKMAX), 1n, maxCid, K2, SHA2, 8n, 8n], DUST, PP, PUB_ADDR)
   ok(pubEvents(rx).some((e) => e.eventName === 'Published' && e.args.manifestCid === maxCid), 'p07b exactly 128 chars passes (boundary)')
 }
 
 // ---- p09/p10 idempotency and regression ----
 
 {
-  // p09 republish: a second order + a second event; the 1 wei still round-trips
+  // p09 republish: a second order + a second event (readers treat an existing event as a no-op)
   // (the reader no-ops when an event already exists)
   const ordersBefore = await read('orderCount')
   const b0 = await bal(B)
-  const rx = await write(B, 'publish', [B.address, LID1, RID3, mCid('pub1'), K1, SHA1, 1234n, 5300000n], 1n, PP, PUB_ADDR)
-  ok(b0 - (await bal(B)) === gasOf(rx), 'p09 republish: seller net = -gas (1 wei returned, exact)')
+  const rx = await write(B, 'publish', [B.address, LID1, RID3, mCid('pub1'), K1, SHA1, 1234n, 5300000n], DUST, PP, PUB_ADDR)
+  ok(b0 - (await bal(B)) === gasOf(rx) + FEE, 'p09 republish: seller net = gas + platform fee (exact)')
   ok((await read('orderCount')) === ordersBefore + 1n, 'p09 the second order increments independently (harmless)')
   ok(pubEvents(rx).filter((e) => e.eventName === 'Published').length === 1, 'p09 a second Published event')
 }
@@ -287,9 +294,9 @@ await write(B, 'createRevision', [FKMAX, 1n, ZERO, ZERO, 0, 0, keccak256(toHex('
   const [up, down, buyers] = await read('ratingOf', [LID1])
   ok(up === 0n && down === 0n && buyers === 1n, 'p10 buyerCount exactly +1 (publisher, deduped) · no ratings (no rate entry here)')
   const [priceHigh] = await read('revisionOf', [LID_HIGH, 1n])
-  ok(priceHigh === 10n ** 17n, 'p10 the high-price listing quote is unaffected by the 1 wei public file')
+  ok(priceHigh === 10n ** 17n, 'p10 the high-price listing quote is unaffected by the dust-price public file')
   const treas = await read('treasury')
-  ok(treas?.toLowerCase() === A.address.toLowerCase(), 'p10b treasury sanity (platformFee=0, no reflux path)')
+  ok(treas?.toLowerCase() === A.address.toLowerCase(), 'p10b treasury sanity (receives only the platform fees)')
 }
 
 // ---- p11 sales() immutable readback + bytecode equality ----

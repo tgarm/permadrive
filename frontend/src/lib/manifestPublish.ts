@@ -9,9 +9,9 @@
 // height to restore the manifest itself from the chain (see manifestRecover.ts).
 
 import type { ApiPromise } from '@polkadot/api'
-import { publishPrepared, prepareUpload } from './publish'
+import { publishPrepared, prepareUpload } from './publish.ts'
 import { getMeta, putMeta } from './store.ts'
-import type { Manifest } from './manifest'
+import type { Manifest } from './manifest.ts'
 import type { SubstrateSigner } from './wallet/types'
 
 export interface ManifestPublication {

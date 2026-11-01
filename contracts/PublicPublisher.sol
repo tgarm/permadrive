@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 /// @title PublicPublisher — PermaDrive public publishing via dust-price sale.
 /// @notice "Public" = selling the file to "the public" (a constant contract
-///  address) at 1 wei through the official DirectSales instance: the purchase
+///  address) at the dust price through the official DirectSales instance: the purchase
 ///  and the Published event (which carries the file key K) complete atomically
 ///  in one transaction, so no "received but withheld" intermediate state can
 ///  exist. Sold means public: the event is the public log (key distribution /
@@ -18,13 +18,14 @@ pragma solidity ^0.8.24;
 ///     listingId match — publishing is always the seller's own decision;
 ///     nobody else holds the real K, and a fake K is rejected by the reader's
 ///     AES-GCM authentication tag.
-///  3. Mandatory 1 wei (DUST_PRICE, not parameterized), 32-byte key, CID
-///     length cap — triple input clamping.
-///  4. purchase with maxPrice = 1 wei plus exact payment clamps the listing
-///     price to exactly 1 wei (PriceTooHigh / ExactPaymentRequired as
-///     backstops); with platformBps <= 20% the fee divides to 0 and
-///     sellerNet = 1 wei is returned to the seller in the same transaction —
-///     the contract holds no funds.
+///  3. Mandatory dust price (DUST_PRICE = 1e13 shannon >= 10x the domain
+///     existential deposit, not parameterized), 32-byte key, CID length cap —
+///     triple input clamping.
+///  4. purchase with maxPrice = DUST_PRICE plus exact payment clamps the
+///     listing price to exactly DUST_PRICE (PriceTooHigh /
+///     ExactPaymentRequired as backstops); sellerNet = 90% of the dust is
+///     returned to the seller in the same transaction (platform fee 10% =
+///     1e12 shannon at 1000 bps) — the contract holds no funds.
 ///  5. Published event fields (plainSha256/plainSize/key) are publisher
 ///     claims, not content authenticity — readers must retrieve, decrypt and
 ///     verify the plaintext digest+size before trusting them. This contract
@@ -50,11 +51,19 @@ contract PublicPublisher {
 
     error NotListingSeller();
     error ListingMismatch();
-    error WrongValue(); // not 1 wei (public = dust price, constant on purpose)
+    error WrongValue(); // not DUST_PRICE (public = dust price, constant on purpose)
     error BadKeyLength(); // K must be 32 bytes
     error CidTooLong(); // event string length cap
 
-    uint256 public constant DUST_PRICE = 1 wei;
+    /// Dust price = 1e13 shannon (0.00001 AI3). The original 1 wei design was
+    /// rejected by the Auto-EVM domain's existential deposit (ED = 1e12
+    /// shannon, measured by bisection on 2026-11-01): any transfer leaving the
+    /// recipient below ED is rejected by the domain — the publisher/sales
+    /// contracts hold 0, so receiving 1 wei reverts (a fresh EOA receiving
+    /// 1 wei reverts too, unrelated to contracts). 10x ED headroom; the net
+    /// cost of publishing = platform fee 10% x DUST_PRICE (1e12 shannon) + gas,
+    /// with 90% of the dust returned to the seller.
+    uint256 public constant DUST_PRICE = 1e13;
     /// CIDv1 base32 is ~59-63 chars; 128 leaves headroom
     uint256 public constant MAX_CID_LENGTH = 128;
     /// Trust domain: official DirectSales instance welded at construction
@@ -64,8 +73,8 @@ contract PublicPublisher {
         sales = sales_;
     }
 
-    /// Dust-price sale: called by the seller themself, value = 1 wei returned
-    /// in the same transaction. The purchase and the emit complete atomically
+    /// Dust-price sale: called by the seller themself, value = DUST_PRICE. The
+    /// purchase and the emit complete atomically
     /// — note that once broadcast, K has already propagated with the calldata
     /// even if this transaction reverts (disclosure happens at broadcast
     /// time, not at inclusion; no contract can undo that).
@@ -85,9 +94,9 @@ contract PublicPublisher {
         if (bytes(manifestCid).length > MAX_CID_LENGTH) revert CidTooLong();
         bytes32 fk = keccak256(bytes(manifestCid)); // same derivation as the frontend fileKeyOf (UTF-8)
         if (IDirectSales(sales).listingIdOf(seller, fk) != listingId) revert ListingMismatch();
-        // maxPrice = msg.value = 1 wei => PriceTooHigh + ExactPaymentRequired
-        // both clamp the listing price to exactly 1 wei; the platform fee
-        // divides to 0 and the 1 wei is returned to the seller
+        // maxPrice = msg.value = DUST_PRICE => PriceTooHigh + ExactPaymentRequired
+        // both clamp the listing price to exactly DUST_PRICE; the platform fee
+        // is 1e12 shannon at 1000 bps and 90% of the dust returns to the seller
         IDirectSales(sales).purchase{value: msg.value}(
             listingId, expectedRevision, uint96(msg.value), type(uint16).max, type(uint16).max
         );

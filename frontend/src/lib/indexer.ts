@@ -6,7 +6,7 @@
 // prefix does not raise a format error, it just always returns not found).
 // Inputs are normalized here uniformly.
 
-import { sleep } from './rpc'
+import { sleep } from './rpc.ts'
 
 export interface ObjectLocation {
   pieceIndex: number

@@ -540,10 +540,18 @@ function MyPurchases() {
   )
 }
 
-export function SharePage({ deepLink }: { deepLink: ShareLinkParams | null }) {
+export function SharePage({ deepLink, parseError }: { deepLink: ShareLinkParams | null; parseError?: string | null }) {
   const { t } = useI18n()
   return (
     <div className="page">
+      {parseError && (
+        <section className="card">
+          <div className="card-head">
+            <h2>{t('share.landingTitle')}</h2>
+          </div>
+          <p className="error-text">{t(parseError)}</p>
+        </section>
+      )}
       {deepLink && (
         <section className="card">
           <div className="card-head">

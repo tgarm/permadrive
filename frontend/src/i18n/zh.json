@@ -505,7 +505,7 @@
     "publishConfirm": "立即公开（广播）",
     "publicConfirmWarning": "公开是永久且不可逆的：加密密钥将永久上链、人人可见，无法撤回，也无法知道谁复制过。",
     "publicConfirmBroadcast": "广播即公开：交易签名发出后，即使最终失败、丢失或被替换，密钥也可能已经被复制。",
-    "publicConfirmCost": "步骤：改价 1 wei（灰尘价）+ 一笔 publish 交易——1 wei 同笔退回，两笔均付 Auto EVM gas。",
+    "publicConfirmCost": "步骤：改价为灰尘价（0.00001 AI3）+ 一笔 publish 交易——灰尘款 90% 同笔退回（平台费 0.000001 AI3），两笔均付 Auto EVM gas。",
     "publishedOk": "已公开。任何人凭分享链接即可下载（无需钱包）。",
     "publishRejected": "签名被拒绝——未发生广播，文件保持原状态。",
     "publicUnconfirmedNotice": "publish 交易在广播后失败。密钥可能已公开——按「已公开（未确认）」处理，不回落未分享；重试即「完成公开」。",
@@ -513,7 +513,8 @@
     "publicHint": "复制公开链接即可分享；任何拿到链接的人都能下载——无需钱包。",
     "publicUnconfirmedHint": "下方链接包含密钥，复制本身即披露行为。可重试公开以完成上链发布。",
     "unsharedHint": "上架或改价都会创建新的不可变 revision；已成交订单不受影响。",
-    "listingOneWeiFailed": "无法把上架价格设为 1 wei——已中止公开（未发生广播）。",
+    "paidHint": "买家付款同笔直达你的地址（平台无托管、无退款）；付款后请尽快经链上私信交付密钥。",
+    "listingDustFailed": "无法把上架价格设为灰尘价——已中止公开（未发生广播）。",
     "copyPublicLink": "复制公开链接",
     "linkCopied": "公开链接已复制（内含密钥——分享出去即公开）。",
     "everSoldNote": "历史提示：此文件曾售出。买家仍持有密钥，下架无法收回其副本。",
@@ -541,6 +542,13 @@
     "integrityBlockExport": "完整性校验未通过（sha256 {0}…）——已阻止保存。仍要导出未校验的字节吗？",
     "eventMismatchExport": "解密内容与 Published 事件声明不符（摘要/大小）。仍要导出吗？",
     "decryptedOk": "已解密「{0}」· sha256 {1}…",
-    "purchasesNotice": "我的购买：密钥由卖家经链上私信送达；评价上链（耗 gas）。"
+    "purchasesNotice": "我的购买：密钥由卖家经链上私信送达；评价上链（耗 gas）。",
+    "badParamNotShareLink": "这不是有效的分享链接。",
+    "badParamMissingManifest": "分享链接缺少 manifest CID（m 参数）。",
+    "badParamCidInvalid": "分享链接的 m 不是合法 CIDv1 字符串。",
+    "badParamCidNotCanonical": "分享链接的 m 不是规范形 CID（请使用分享方复制的原始链接）。",
+    "badParamBadHeight": "分享链接的 h（块高提示）超出安全范围。",
+    "badParamBadOwner": "分享链接的 o 不是合法的 EVM 地址。",
+    "badParamBadKey": "分享链接的 k 不是 64 位 hex 密钥。"
   }
 }

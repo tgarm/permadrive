@@ -7,9 +7,9 @@
 // height hint is the only fast way to locate the manifest).
 
 import type { ApiPromise } from '@polkadot/api'
-import { extractRemarkNodes } from './chain'
-import { assemble } from './dag'
-import { validateManifest, type Manifest } from './manifest'
+import { extractRemarkNodes } from './chain.ts'
+import { assemble } from './dag.ts'
+import { validateManifest, type Manifest } from './manifest.ts'
 import { t } from '../i18n/core.ts'
 
 // The publisher records the inclusion block; +3 tolerates the extreme case of

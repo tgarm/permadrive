@@ -38,7 +38,7 @@ export interface ParsedShareLink {
 
 export interface ParsedShareLinkError {
   ok: false
-  /** an i18n key (share.badParam.*); bad carries the offending parameter for the UI */
+  /** an i18n key (share.badParamXxx, dot-free camelCase - the dictionary is a flat namespace); bad carries the offending parameter for the UI */
   reason: string
   bad?: string
 }
@@ -49,10 +49,10 @@ export function parseCidStrict(cid: string): { ok: true; canonical: string } | {
   try {
     const parsed = stringToCid(cid)
     const canonical = cidToString(parsed)
-    if (canonical !== cid) return { ok: false, reason: 'share.badParam.cidNotCanonical' }
+    if (canonical !== cid) return { ok: false, reason: 'share.badParamCidNotCanonical' }
     return { ok: true, canonical }
   } catch (e) {
-    return { ok: false, reason: 'share.badParam.cidInvalid' }
+    return { ok: false, reason: 'share.badParamCidInvalid' }
   }
 }
 
@@ -61,11 +61,11 @@ const isSafeHeight = (v: number): boolean => Number.isSafeInteger(v) && v >= 0 &
 /** Parse the `#/s?...` query. Any invalid parameter rejects the whole link
  *  (ok:false with a stable reason key). */
 export function parseShareHash(hash: string): ParsedShareLink | ParsedShareLinkError {
-  if (!hash.startsWith(SHARE_HASH_PREFIX)) return { ok: false, reason: 'share.badParam.notShareLink' }
+  if (!hash.startsWith(SHARE_HASH_PREFIX)) return { ok: false, reason: 'share.badParamNotShareLink' }
   const query = hash.slice(SHARE_HASH_PREFIX.length)
   const usp = new URLSearchParams(query)
   const m = usp.get('m')?.trim() ?? ''
-  if (!m) return { ok: false, reason: 'share.badParam.missingManifest' }
+  if (!m) return { ok: false, reason: 'share.badParamMissingManifest' }
   const cid = parseCidStrict(m)
   if (!cid.ok) return { ok: false, reason: cid.reason, bad: m }
 
@@ -73,21 +73,21 @@ export function parseShareHash(hash: string): ParsedShareLink | ParsedShareLinkE
   const h = usp.get('h')
   if (h != null && h !== '') {
     const n = Number(h)
-    if (!isSafeHeight(n)) return { ok: false, reason: 'share.badParam.badHeight', bad: h }
+    if (!isSafeHeight(n)) return { ok: false, reason: 'share.badParamBadHeight', bad: h }
     height = n
   }
 
   let owner: string | null = null
   const o = usp.get('o')?.trim() ?? ''
   if (o) {
-    if (!/^0x[0-9a-fA-F]{40}$/.test(o) || /^0x0{40}$/.test(o)) return { ok: false, reason: 'share.badParam.badOwner', bad: o }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(o) || /^0x0{40}$/.test(o)) return { ok: false, reason: 'share.badParamBadOwner', bad: o }
     owner = o.toLowerCase()
   }
 
   let key: string | null = null
   const k = usp.get('k')?.trim() ?? ''
   if (k) {
-    if (!/^[0-9a-fA-F]{64}$/.test(k)) return { ok: false, reason: 'share.badParam.badKey', bad: k.slice(0, 12) + '…' }
+    if (!/^[0-9a-fA-F]{64}$/.test(k)) return { ok: false, reason: 'share.badParamBadKey', bad: k.slice(0, 12) + '…' }
     key = '0x' + k.toLowerCase()
   }
 

@@ -67,5 +67,23 @@
     "treasury": "0xed7Ef7d8fC96615797B4f5720aEd5FFb63B4412F",
     "platformBps": 1000,
     "deployedAt": "2026-10-31T10:42:16.508Z"
+  },
+  "auto-evm-mainnet-public-publisher": {
+    "chainId": 870,
+    "address": "0x1aa245c60e632e884c638e247ee23c1ccf52a328",
+    "txHash": "0xcb494deb45ff0305aff76a876393f7a8c3beca52007e47d41676ba0dceb15e3b",
+    "blockNumber": "5334946",
+    "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "sales": "0x4321c47c84fd38c8bff8ca33cf0a0592f3a2ee9b",
+    "deployedAt": "2026-10-31T17:17:17.265Z"
+  },
+  "auto-evm-mainnet-public-publisher-test": {
+    "chainId": 870,
+    "address": "0x7a55387e9da812d4a8a5867e242fb9c23d23fe45",
+    "txHash": "0x42a805276dfd3746538dafc96a1fe2d4ec215a5947ef86e6ccb6b448b73814ce",
+    "blockNumber": "5334953",
+    "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "sales": "0xe2fb274a3c82d6ef88ac22c3eba201b667f34ade",
+    "deployedAt": "2026-10-31T17:18:00.458Z"
   }
 }

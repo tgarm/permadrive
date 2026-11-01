@@ -1,6 +1,6 @@
 // Per-file share panel (three-state model): on-chain state derivation
 // (unshared / for-sale / public) and the transitions — list for sale
-// (createRevision), delist (buyers keep their K), make public (1 wei dust
+// (createRevision), delist (buyers keep their K), make public (dust-price
 // price + Published event; broadcast counts as disclosure). History hints
 // (everSold/everDisclosed) are local-only enhancements, never on-chain
 // omniscience. Disclosure state machine: disclosureAttempted is persisted
@@ -25,6 +25,7 @@ import {
   type SalesOrderRow,
 } from '../lib/sales'
 import {
+  DUST_PRICE,
   fetchPublishedByKey,
   hasDisclosureAttempted,
   hasEverDisclosed,
@@ -208,14 +209,14 @@ export function SharePanel({ manifest, registryRecord, getPassphrase, onNotice, 
       const prep = await ensureManifestPrepared()
       if (!manifest.encryption) throw new Error(t('errors.manifestNotEncrypted'))
       const keyBytes = await unwrapManifestKey(evm, manifest, getPassphrase)
-      // 1 wei listing (re-pricing = a new immutable revision; sold orders are
-      // unaffected); reuse when the price is already 1 wei
+      // dust-price listing (re-pricing = a new immutable revision; sold orders
+      // are unaffected); reuse when the price is already the dust price
       let listing = await getListingSales(evm.address, prep.manifestCid)
-      if (!listing || listing.price !== 1n) {
-        await createRevisionSales(evm, prep.manifestCid, 1n)
+      if (!listing || listing.price !== DUST_PRICE) {
+        await createRevisionSales(evm, prep.manifestCid, DUST_PRICE)
         listing = await getListingSales(evm.address, prep.manifestCid)
       }
-      if (!listing || listing.price !== 1n) throw new Error(t('share.listingOneWeiFailed'))
+      if (!listing || listing.price !== DUST_PRICE) throw new Error(t('share.listingDustFailed'))
       // Persist the disclosure marker BEFORE handing the signature request to
       // the wallet (broadcast) — propagation is disclosure
       await markEverDisclosed(manifest.rootCid)
@@ -242,6 +243,7 @@ export function SharePanel({ manifest, registryRecord, getPassphrase, onNotice, 
         return
       }
       onNotice(t('share.publishedOk'))
+      await unmarkDisclosureAttempted(manifest.rootCid) // event visible = confirmed: clear the unconfirmed marker (D8 lifecycle closure)
       await refresh()
       onChanged()
     })

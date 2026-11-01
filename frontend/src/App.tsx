@@ -12,7 +12,7 @@ import { NotesPage } from './pages/NotesPage'
 import { VaultPage } from './pages/VaultPage'
 import { AboutPage } from './pages/AboutPage'
 import { SettingsPage } from './pages/SettingsPage'
-import { parseShareHash, type ShareLinkParams } from './lib/shareLink'
+import { parseShareHash } from './lib/shareLink'
 import { useI18n } from './i18n'
 
 type Tab = 'files' | 'share' | 'messages' | 'notes' | 'vault' | 'about' | 'settings'
@@ -23,11 +23,16 @@ function Shell() {
   // kept, never cleared (the landing view is read-only and idempotent, a
   // refresh re-parses, transactions only fire on explicit clicks; no
   // hashchange listener in the MVP — pasting a new link applies on refresh).
-  const [tab, setTab] = useState<Tab>(() => (parseShareHash(location.hash).ok ? 'share' : 'files'))
-  const [deepLink] = useState<ShareLinkParams | null>(() => {
+  // When the hash looks like a share link (#/s prefix) but fails to parse,
+  // still land on the share tab and render an explicit error (D11 acceptance:
+  // invalid parameters are rejected with a clear error, never a silent
+  // fall-back to the upload page).
+  const [deepLink, deepLinkError] = (() => {
     const parsed = parseShareHash(location.hash)
-    return parsed.ok ? parsed.params : null
-  })
+    if (parsed.ok) return [parsed.params, null] as const
+    return [null, location.hash.startsWith('#/s') ? parsed.reason : null] as const
+  })()
+  const [tab, setTab] = useState<Tab>(() => (deepLink || deepLinkError ? 'share' : 'files'))
   const { t } = useI18n() // each component subscribes to locale changes (same convention as xdm-bridge)
   return (
     <div className="app">
@@ -72,7 +77,7 @@ function Shell() {
         {tab === 'files' ? (
           <FilesPage />
         ) : tab === 'share' ? (
-          <SharePage deepLink={deepLink} />
+          <SharePage deepLink={deepLink} parseError={deepLinkError} />
         ) : tab === 'messages' ? (
           <MessagesPage />
         ) : tab === 'notes' ? (

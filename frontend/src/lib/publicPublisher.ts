@@ -1,5 +1,5 @@
 // Public publisher (share design, 2026-10-31): "public" = selling the file to
-// "the public" at the 1 wei dust price; the purchase and the Published event
+// "the public" at the dust price; the purchase and the Published event
 // (carrying the file key K) complete atomically in one transaction. When
 // config publicPublisherAddress is empty, both the public entry and the public
 // log reads are disabled (paid sharing via DirectSales is unaffected).
@@ -29,6 +29,19 @@ import { autoEvmChain } from './evm.ts'
 import { fileKeyOf, listingIdOf, salesActive, assertSalesActive } from './sales.ts'
 import type { EvmSigner } from './wallet/types.ts'
 import { t } from '../i18n/core.ts'
+
+/** Dust price = 1e13 shannon (0.00001 AI3), same constant as the contract.
+ *  The 1 wei version was rejected by the Auto-EVM domain existential deposit
+ *  (ED = 1e12, measured by bisection on 2026-11-01): transfers leaving the
+ *  recipient below ED are rejected by the domain - publisher/sales hold 0, so
+ *  receiving 1 wei reverts. 10x ED headroom; the net cost of publishing =
+ *  platform fee 10% x DUST_PRICE = 1e12 shannon + gas. */
+export const DUST_PRICE = 10n ** 13n
+/** Explicit gas for publish: the domain gas estimator reserves "value + block
+ *  gas limit x price" for value>0 calls, so any balance below ~0.54 AI3 gets a
+ *  false OutOfFund (real execution reserves only actual gas x price). Publish
+ *  uses ~0.15M gas in practice; keep headroom. */
+const PUBLISH_GAS = 600_000n
 
 const addrOk = (a: string) => /^0x[0-9a-fA-F]{40}$/.test(a) && !/^0x0{40}$/.test(a)
 
@@ -134,7 +147,7 @@ export async function fetchPublishedByKey(manifestCid: string): Promise<Publishe
 
 export interface PublishPublicParams {
   manifestCid: string
-  /** the current 1 wei listing revision (read back after createRevisionSales(1 wei)) */
+  /** the current dust-price listing revision (read back after createRevisionSales(DUST_PRICE)) */
   expectedRevision: bigint
   /** the file key K (32 bytes) */
   keyBytes: Uint8Array
@@ -144,7 +157,7 @@ export interface PublishPublicParams {
   manifestHeightHint: number
 }
 
-/** Publish = 1 wei dust-price sale + Published event (K goes public with it).
+/** Publish = dust-price sale + Published event (K goes public with it).
  *  Disclosure state machine: signing and broadcasting complete inside the
  *  wallet (writeContract), so there is no observable "signed but not yet
  *  broadcast" moment — the caller persists the disclosure marker BEFORE this
@@ -165,12 +178,13 @@ export async function publishPublic(signer: EvmSigner, params: PublishPublicPara
       listingIdOf(signer.address, params.manifestCid),
       params.expectedRevision,
       params.manifestCid,
-      toHex(params.keyBytes) as `0x${string}`, // bytes args need 0x-prefixed hex
+      ('0x' + toHex(params.keyBytes)) as `0x${string}`, // toHex here is the app bytes.ts variant (no 0x prefix); bytes args need the prefix - a bare hex string makes viem write the char count as the length field (broken calldata -> on-chain BadKeyLength, hit on mainnet 2026-11-01)
       ('0x' + params.plainSha256.replace(/^0x/, '')) as `0x${string}`,
       BigInt(params.plainSize),
       BigInt(params.manifestHeightHint),
     ],
-    value: 1n,
+    value: DUST_PRICE,
+    gas: PUBLISH_GAS, // bypass the estimator (false OutOfFund reservation, see PUBLISH_GAS above)
     chain: autoEvmChain,
     account: accountOf(signer),
   })

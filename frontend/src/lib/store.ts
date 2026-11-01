@@ -15,8 +15,8 @@
 // Design-review R03/R04 extend MessageRecord (decrypt status, chain/block
 // fields) and R08 reworks the transaction semantics below.
 
-import type { Manifest } from './manifest'
-import type { VaultEnvelopeV1 } from './vaultCrypto'
+import type { Manifest } from './manifest.ts'
+import type { VaultEnvelopeV1 } from './vaultCrypto.ts'
 
 const DB_NAME = 'permadrive'
 const DB_VERSION = 4

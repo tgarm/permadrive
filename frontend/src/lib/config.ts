@@ -25,7 +25,7 @@ export interface AppConfig {
    *  history — there is no frontend entry anymore.) */
   salesAddress: string
   salesDeployBlock: number
-  /** PublicPublisher (public = 1 wei dust-price sale + a Published event that
+  /** PublicPublisher (public = dust-price sale + a Published event that
    *  makes the file key public). When empty, both the public entry and the
    *  public log reads are disabled (for-sale actions via DirectSales are
    *  unaffected). Reader trust domain: only events emitted by this address
@@ -47,11 +47,12 @@ export const DEFAULT_CONFIG: AppConfig = {
   // DirectSales mainnet deployment (contracts/deployments.json auto-evm-mainnet-direct-sales, 2026-10-31)
   salesAddress: '0x4321c47c84fd38c8bff8ca33cf0a0592f3a2ee9b',
   salesDeployBlock: 5331816,
-  // PublicPublisher — empty by default: the public entry stays disabled until
-  // deployed; after deployment fill in the address and block from
-  // deployments.json (auto-evm-mainnet-public-publisher)
-  publicPublisherAddress: '',
-  publicPublisherDeployBlock: 0,
+  // PublicPublisher mainnet deploy (contracts/deployments.json
+  // auto-evm-mainnet-public-publisher, 2026-11-01, DUST_PRICE 1e13 version;
+  // the same-day 1 wei first version 0x7101431f...47009 was abandoned - the
+  // domain ED rejects 1 wei transfers)
+  publicPublisherAddress: '0x1aa245c60e632e884c638e247ee23c1ccf52a328',
+  publicPublisherDeployBlock: 5334946,
 }
 
 // A few dev/acceptance devices stored the v1 address as registryAddress back

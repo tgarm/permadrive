@@ -4,7 +4,7 @@
 // CID → new version). K is generated once and never changes (one keystore is
 // valid for all versions; wrappedKeys carry over unchanged across versions).
 
-import { fromHex } from './bytes'
+import { fromHex } from './bytes.ts'
 import { t } from '../i18n/core.ts'
 import {
   sealPayload,
@@ -14,8 +14,8 @@ import {
   type KeystoreFileV1,
   type VaultEnvelopeV1,
   type WrappedKey,
-} from './vaultCrypto'
-import { walletClientFor } from './registry'
+} from './vaultCrypto.ts'
+import { walletClientFor } from './registry.ts'
 import type { EvmSigner } from './wallet/types'
 
 export const VAULT_FILE_PREFIX = 'pdvault-'

@@ -505,7 +505,7 @@
     "publishConfirm": "Publish now (broadcast)",
     "publicConfirmWarning": "Making this file public is PERMANENT and IRREVERSIBLE. The encryption key will be visible to everyone on-chain, forever. You cannot un-publish it or know who has copied it.",
     "publicConfirmBroadcast": "Broadcasting counts as publishing: once the transaction is signed and sent, the key may already be public — even if the transaction later fails, is dropped or replaced.",
-    "publicConfirmCost": "Steps: re-list at 1 wei (dust price) + one publish transaction — the 1 wei is returned to you in the same transaction; you pay Auto EVM gas for both.",
+    "publicConfirmCost": "Steps: re-list at the dust price (0.00001 AI3) + one publish transaction — 90% of the dust is returned in the same transaction (platform fee 0.000001 AI3); you pay Auto EVM gas for both.",
     "publishedOk": "Published. The file is now public — anyone can download it with a share link (zero wallets needed).",
     "publishRejected": "Signature rejected — nothing was broadcast, the file keeps its previous state.",
     "publicUnconfirmedNotice": "The publish transaction failed after being broadcast. The key may already be public — treated as \"public (unconfirmed)\", not unshared. Retry completes the publication.",
@@ -513,7 +513,8 @@
     "publicHint": "Copy a public link to share this file. Anyone with the link can download it — no wallet required.",
     "publicUnconfirmedHint": "The link below contains the key; copying it is itself a disclosure. Retry publishing to finish the on-chain publication.",
     "unsharedHint": "Selling or re-pricing creates a new immutable revision; sold orders are never affected.",
-    "listingOneWeiFailed": "Could not set the listing price to 1 wei — aborting the publication (nothing was broadcast).",
+    "paidHint": "Buyer payments land directly with you in the same transaction (no escrow, no platform refunds); deliver the key via on-chain private message promptly after payment.",
+    "listingDustFailed": "Could not set the listing price to the dust price — aborting the publication (nothing was broadcast).",
     "copyPublicLink": "Copy public link",
     "linkCopied": "Public link copied (contains the key — sharing it publishes the file).",
     "everSoldNote": "History: this file was sold before. Buyers keep their keys — delisting cannot revoke their copies.",
@@ -541,6 +542,13 @@
     "integrityBlockExport": "Integrity check FAILED (sha256 {0}…) — the download is blocked. Export the unverified bytes anyway?",
     "eventMismatchExport": "The decrypted content does not match the Published event declaration (digest/size). Export anyway?",
     "decryptedOk": "Decrypted \"{0}\" · sha256 {1}…",
-    "purchasesNotice": "Your purchases: keys arrive via on-chain private messages from the seller; rating is on-chain (gas applies)."
+    "purchasesNotice": "Your purchases: keys arrive via on-chain private messages from the seller; rating is on-chain (gas applies).",
+    "badParamNotShareLink": "This is not a valid share link.",
+    "badParamMissingManifest": "The share link is missing the manifest CID (the m parameter).",
+    "badParamCidInvalid": "The share link's m is not a valid CIDv1 string.",
+    "badParamCidNotCanonical": "The share link's m is not in canonical form — use the original link copied by the sharer.",
+    "badParamBadHeight": "The share link's h (block height hint) is out of safe range.",
+    "badParamBadOwner": "The share link's o is not a valid EVM address.",
+    "badParamBadKey": "The share link's k is not a 64-hex-digit key."
   }
 }

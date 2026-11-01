@@ -76,8 +76,8 @@ for (const inst of INSTANCES) {
       publicClient.readContract({ address: contractAddress, abi: artifact.abi, functionName: f }),
     ),
   )
-  if (salesOn.toLowerCase() !== sales.address.toLowerCase() || dustOn !== 1n || maxCidOn !== 128n)
-    throw new Error('readback mismatch (sales/DUST_PRICE/MAX_CID_LENGTH)')
+  if (salesOn.toLowerCase() !== sales.address.toLowerCase() || dustOn !== 10n ** 13n || maxCidOn !== 128n)
+    throw new Error('readback mismatch (sales/DUST_PRICE=1e13/MAX_CID_LENGTH=128)')
   console.log(`[${inst.key}] contract: ${contractAddress} · block ${receipt.blockNumber} · gas ${receipt.gasUsed} · sales=${salesOn} · readback OK`)
   deployments[inst.key] = {
     chainId: 870,

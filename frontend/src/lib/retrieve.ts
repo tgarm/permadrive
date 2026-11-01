@@ -8,10 +8,10 @@
 // the data is already on chain and can be retrieved directly.
 
 import type { ApiPromise } from '@polkadot/api'
-import { extractRemarkNodes } from './chain'
-import { assemble } from './dag'
+import { extractRemarkNodes } from './chain.ts'
+import { assemble } from './dag.ts'
 import type { Manifest } from './manifest'
-import { sha256Hex } from './bytes'
+import { sha256Hex } from './bytes.ts'
 import { t } from '../i18n/core.ts'
 
 export interface RetrieveResult {
