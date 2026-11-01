@@ -120,3 +120,9 @@ More from the same family — open-source, pure-frontend tools for Autonomys:
 ## License
 
 [MIT](LICENSE)
+
+## First-use guidance and browser checks
+
+My Files includes a five-step storage guide with account readiness, a recovery-JSON export action and a download-integrity check. Checks refer to the first file in the list; export and verification are session-only and do not prove an offline backup was safely retained. On-chain directory backup remains optional and separately charged.
+
+Browser checks live in `scripts/verify/browser/`. From `scripts/verify`, install dependencies, run `npx playwright install chromium`, then `npm run browser`. The default suite uses an unfunded wallet sentinel and mock chain fixtures; it never broadcasts transactions. An optional real public-download fixture needs `PD_PUBLIC_SHARE_URL` and `PD_PUBLIC_SHA256`. Real extension-wallet compatibility and mainnet transaction acceptance are separate checks.

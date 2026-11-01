@@ -6,7 +6,8 @@
   "scripts": {
     "rpc": "node rpc-check.mjs",
     "indexer": "node indexer-check.mjs",
-    "fee": "node fee-estimate.mjs"
+    "fee": "node fee-estimate.mjs",
+    "browser": "playwright test --config browser/playwright.config.mjs"
   },
   "dependencies": {
     "@autonomys/auto-dag-data": "^1.6.16",
@@ -16,6 +17,7 @@
   },
   "devDependencies": {
     "fake-indexeddb": "^6.2.7",
-    "viem": "^2.57.13"
+    "viem": "^2.57.13",
+    "@playwright/test": "^1.64.1"
   }
 }
