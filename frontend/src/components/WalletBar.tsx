@@ -1,7 +1,8 @@
 import { WalletBalance } from './WalletBalance'
 // Wallet bar: the two signer stacks connect independently.
-//  Autonomys Consensus — extension wallet (Substrate injection: Talisman / SubWallet /
-//              Polkadot.js, production path) or local key (dev / acceptance
+//  Autonomys Consensus — extension wallet (Substrate injection: Talisman / SubWallet,
+//              production path; polkadot.js is no longer listed, see
+//              injected-consensus.ts) or local key (dev / acceptance
 //              path; the mnemonic is kept in memory only and is lost on refresh)
 //  Auto EVM —   injected browser wallet (EIP-6963 multi-wallet discovery:
 //              MetaMask etc., production path) or local key (m/44'/60'

@@ -71,7 +71,7 @@
     "aria": "切换配色方案"
   },
   "wallet": {
-    "noExtension": "未检测到钱包扩展（Talisman / SubWallet / Polkadot.js）",
+    "noExtension": "未检测到钱包扩展（Talisman / SubWallet）",
     "connectEvm": "连接浏览器钱包",
     "noEvmExtension": "未检测到 Auto EVM 钱包（MetaMask、Rabby、Coinbase Wallet 等）—— 本地密钥 (dev) 可用",
     "devToggle": "本地密钥 (dev)",

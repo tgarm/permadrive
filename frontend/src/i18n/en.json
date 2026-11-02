@@ -71,7 +71,7 @@
     "aria": "Toggle color scheme"
   },
   "wallet": {
-    "noExtension": "No wallet extension detected (Talisman / SubWallet / Polkadot.js)",
+    "noExtension": "No wallet extension detected (Talisman / SubWallet)",
     "connectEvm": "Connect browser wallet",
     "noEvmExtension": "No Auto EVM wallet detected (MetaMask, Rabby, Coinbase Wallet…) — Local key (dev) is available",
     "devToggle": "Local key (dev)",

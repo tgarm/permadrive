@@ -22,7 +22,12 @@ export interface ConsensusWallet {
   title: string
   extension: ConsensusExtension
 }
-const TITLES: Record<string, string> = { talisman: 'Talisman', 'subwallet-js': 'SubWallet', 'polkadot-js': 'Polkadot.js' }
+// Product decision (2026-11-02, family-wide): only Talisman / SubWallet are
+// offered. The polkadot.js extension is a developer tool (no EVM side,
+// error-prone account model) and is no longer presented as a user wallet —
+// SubWallet and Talisman speak its injectedWeb3 protocol, so the protocol
+// itself is unaffected.
+const TITLES: Record<string, string> = { talisman: 'Talisman', 'subwallet-js': 'SubWallet' }
 
 /** Discovery is read-only: enable is called only after a connect click. */
 export function discoverConsensusWallets(injected?: Record<string, ConsensusExtension>): ConsensusWallet[] {
