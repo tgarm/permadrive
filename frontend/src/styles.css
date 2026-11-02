@@ -87,9 +87,11 @@ body {
   align-items: center;
 }
 
-.brand-mark {
-  color: var(--accent);
-  font-size: 28px;
+.brand-logo {
+  /* Header logo = the favicon file; sizes match the xdm-bridge .brand-logo */
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
 }
 
 .brand h1 {
@@ -169,7 +171,7 @@ body {
   .wallet-bar { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .brand { gap: 8px; }
   .brand h1 { font-size: 20px; }
-  .brand-mark { font-size: 24px; }
+  .brand-logo { width: 26px; height: 26px; }
 }
 
 @media (max-width: 380px) {
@@ -506,10 +508,12 @@ select:focus {
   font-size: 12px;
 }
 
-/* icon-only button (e.g. the balance refresh glyph) */
+/* icon-only button (e.g. the balance refresh glyph) — glyph must be legible
+   on its own, so it runs larger than button text (family rule) */
 .btn.icon {
   padding: 4px 8px;
   line-height: 1;
+  font-size: 16px;
 }
 
 .btn.link {

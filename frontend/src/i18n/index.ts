@@ -3,11 +3,13 @@
 // resolution: localStorage saved value → browser language → 'en' fallback;
 // <html lang> and the tab title follow the locale. The pure state machine and
 // t() live in ./core — src/lib/ imports core so Node selftests can import lib
-// modules directly. The en/zh dictionaries are byte-identical across trees.
+// modules directly. The four dictionaries are byte-identical across trees.
 
 import { useSyncExternalStore } from 'react'
 import en from './en.json'
 import zh from './zh.json'
+import es from './es.json'
+import de from './de.json'
 import {
   getLocale,
   isLocale,
@@ -21,10 +23,10 @@ import {
   type Locale,
 } from './core.ts'
 
-registerDictionaries({ en, zh })
+registerDictionaries({ en, zh, es, de })
 
 export { t, getLocale, subscribe, isLocale, versionCount, nodeCount, LOCALES, type Locale }
-export const messages: Record<Locale, Record<string, unknown>> = { en, zh }
+export const messages: Record<Locale, Record<string, unknown>> = { en, zh, es, de }
 
 const LOCALE_KEY = 'locale'
 
@@ -45,8 +47,9 @@ function getDefaultLocale(): Locale {
 }
 
 // Sync the document: <html lang> and the tab title (title follows the dictionary)
+const HTML_LANG: Record<Locale, string> = { en: 'en', zh: 'zh-CN', es: 'es', de: 'de' }
 export function syncDocument(): void {
-  document.documentElement.lang = getLocale() === 'zh' ? 'zh-CN' : 'en'
+  document.documentElement.lang = HTML_LANG[getLocale()]
   document.title = t('app.title')
 }
 

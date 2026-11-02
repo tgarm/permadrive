@@ -6,8 +6,10 @@
 // resolver. English is the authoritative dictionary; missing keys fall back
 // to it.
 
-export type Locale = 'en' | 'zh'
-export const LOCALES = ['en', 'zh'] as const
+// Family language matrix shared with the xdm-bridge: en/zh/de/es. LOCALES
+// order is the display order of the language selector (en, zh, es, de).
+export type Locale = 'en' | 'zh' | 'de' | 'es'
+export const LOCALES = ['en', 'zh', 'es', 'de'] as const
 
 type Dict = Record<string, unknown>
 

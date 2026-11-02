@@ -39,7 +39,8 @@ function Shell() {
     <div className="app">
       <header className="app-header">
         <div className="brand">
-          <span className="brand-mark">◆</span>
+          {/* Header logo and favicon are the same file (family rule shared with xdm-bridge) */}
+          <img src="./favicon.svg" alt="" className="brand-logo" />
           <div>
             <h1>PermaDrive</h1>
             <p className="tagline">{t('app.tagline')}</p>
