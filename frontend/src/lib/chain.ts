@@ -113,6 +113,20 @@ export class TxResultUnknownError extends Error {
   }
 }
 
+/** Provably not broadcast (HTTP 413/414: the gateway rejected the request body
+ * before it reached the node) — fundamentally different from "result unknown":
+ * resubmitting the same batch or a smaller replan is safe (the transaction
+ * never left this machine). Introduced with dynamic batch publishing
+ * (2026-11-03): RPC endpoints differ in accepted body sizes, and this failure
+ * class is the normal trigger for the shrink fallback. */
+export class TxNotSentError extends Error {
+  constructor(message: string, options: { cause?: unknown } = {}) {
+    super(message)
+    this.name = 'TxNotSentError'
+    if (options.cause !== undefined) (this as { cause?: unknown }).cause = options.cause
+  }
+}
+
 /** Not found within the scan window (may still be in the pool or an earlier
  * block) — carries recovery hints (txHash + start height); callers can persist
  * and rescan by hash; never auto-resent */
@@ -202,6 +216,9 @@ export async function submitAndWaitConfirmed(
     }
   } catch (e) {
     if (e instanceof SubmitResultUnknownError) {
+      // a gateway body-size rejection (413/414) means the request never reached
+      // the node = provably not broadcast, unlike "result unknown"
+      if (/HTTP 413|HTTP 414/.test((e as Error).message)) throw new TxNotSentError((e as Error).message, { cause: e })
       // transport failure (timeout/disconnect/empty) — the tx may have reached
       // the node; the result is unknown
       throw new TxResultUnknownError((e as Error).message, { cause: e })

@@ -197,10 +197,14 @@ const WRITE_METHODS = new Set(['author_submitExtrinsic', 'author_submitAndWatchE
 // JSON-RPC error is an explicit node rejection (rethrown as-is); a timeout or
 // disconnect means "result unknown" and is never auto-retried.
 
-/** Extrinsics larger than this (4 MB) are submitted over WS: a 4 MB
- * extrinsic = an 8 MB hex POST, the conservative safe boundary under the
- * gateway limit and the 30s timeout on the HTTP path */
-export const WS_SUBMIT_THRESHOLD_BYTES = 4 * 1024 * 1024
+/** Extrinsics larger than this (6 MB encoded = 12 MB hex POST, inside the
+ * ~15 MB gateway body cap verified on both domains) keep the HTTP path.
+ * Below the cap HTTP is the universal transport; WS is the escape hatch for
+ * larger batches where HTTP would hit the 413 wall — and it is known to work
+ * only outside the browser (browser WS drops multi-MB messages silently,
+ * 2026-11-03 measurement; Node replies in seconds). Publishing batches are
+ * budgeted at 4.4 MB encoded, so browser flows never reach this threshold. */
+export const WS_SUBMIT_THRESHOLD_BYTES = 6 * 1024 * 1024
 
 export const useWsSubmit = (encodedLength: number): boolean => encodedLength > WS_SUBMIT_THRESHOLD_BYTES
 

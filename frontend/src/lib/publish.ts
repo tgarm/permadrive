@@ -4,18 +4,20 @@
 //   estimateFee(api, bytes) byteFee × total bytes — payment_queryInfo panics
 //                           on large remarks (mainnet runtime bug), so use a
 //                           first-order approximation
-//   publishPrepared(...)    wallet signs → utility.batch single tx preferred;
-//                           degrade to per-tx only on a definitive capacity/
-//                           format rejection proven not received →
-//                           confirmationDepth confirmation → manifest v2
+//   publishPrepared(...)    dynamic batching: remarks are grouped by an
+//                           encoded-size budget (default 4.4 MB per batch),
+//                           one wallet signature per batch, confirmed
+//                           sequentially; "provably not sent" failures can be
+//                           retried / shrunk / aborted interactively, anything
+//                           else halts for verification → manifest v2
 //
 // R02 error model: submission failure ≠ not submitted. The publish task (tx
 // hashes + start height + manifest reconstruction metadata) is persisted right
 // after signing; every later failure is "result pending verification" — only
 // hash-based rescanning (verifyPublishTask) is allowed, never automatic
 // resubmission (same-nonce resubmission hits the (signer, nonce) dedup ban).
-// Structured errors live in chain.ts (TxRejected / TxResultUnknown / TxNotFound
-// / InclusionLost).
+// Structured errors live in chain.ts (TxNotSent / TxRejected / TxResultUnknown
+// / TxNotFound / InclusionLost).
 //
 // Second review (F02/F03): a partial per-tx publish must never be
 // mistaken for a complete recovery — the task records the per-tx node plan
@@ -26,6 +28,7 @@
 import type { ApiPromise } from '@polkadot/api'
 import type { SubmittableExtrinsic } from '@polkadot/api/types'
 import {
+  TxNotSentError,
   TxRejectedError,
   extractRemarkNodes,
   remarkNodesFromExtrinsic,
@@ -52,6 +55,61 @@ export interface PreparedUpload {
   rootCid: string
   nodes: PackedNode[]
   totalBytes: number
+}
+
+// ---- Dynamic batching (2026-11-03) ----
+// The public gateways cap HTTP request bodies at ~15 MB (hex terms; 14 MB
+// passes / 16 MB returns 413 on both domains, measured), and browser WS drops
+// multi-MB messages silently — so remarks are grouped by an encoded-size
+// budget, one wallet signature per batch. A 4.4 MB budget encodes to an
+// ~8.8 MB hex POST, 5 MB under the verified 14 MB pass line; a 4 MiB file is
+// one batch, 8 MiB is two, 64 MiB is fifteen. Official AutoDrive carries a
+// single node per transaction (64 KiB, submitted concurrently) — the budget is
+// still ~65x its per-tx size. The recovery envelope rides the last batch.
+export const MAX_BATCH_ENCODED_BYTES = Math.floor(4.4 * 1024 * 1024)
+/** Lower bound for the shrink fallback (user-facing chain 4 → 2 → 1 MB) */
+export const MIN_BATCH_ENCODED_BYTES = 1024 * 1024
+
+/** Group remarks by encoded length budget (pure function; a single remark is
+ * ~65.5 KiB and always fits any workable budget, so groups are non-empty).
+ * Returns the remark groups; the caller wraps them in batchAll/batch. */
+export function planBatches<T>(items: T[], encodedLength: (item: T) => number, budget = MAX_BATCH_ENCODED_BYTES): T[][] {
+  const groups: T[][] = []
+  let current: T[] = []
+  let bytes = 0
+  for (const item of items) {
+    if (current.length > 0 && bytes + encodedLength(item) > budget) {
+      groups.push(current)
+      current = []
+      bytes = 0
+    }
+    current.push(item)
+    bytes += encodedLength(item)
+  }
+  if (current.length > 0) groups.push(current)
+  return groups
+}
+
+/** Estimate the batch count from total encoded bytes (confirmation-panel
+ * preview; the exact count is planBatches at publish time) */
+export const estimateBatchCount = (totalEncodedBytes: number, budget = MAX_BATCH_ENCODED_BYTES): number =>
+  Math.max(1, Math.ceil(totalEncodedBytes / budget))
+
+export interface ChunkFailureInfo {
+  batchIndex: number
+  totalBatches: number
+  canShrink: boolean
+  error: unknown
+}
+
+/** "Provably not sent" failures: a capacity rejection (a synchronous node
+ * rejection proves non-acceptance) or a gateway 413/414 (the bytes never
+ * reached the node). Only these allow retry/shrink — "result unknown" never
+ * retries. */
+const isShrinkableFailure = (e: unknown): boolean => {
+  if (e instanceof TxNotSentError) return true
+  if (e instanceof TxRejectedError) return BATCH_CAPACITY_RE.test(e.message) && !MAYBE_RECEIVED_RE.test(e.message)
+  return false
 }
 
 export async function prepareUpload(file: File): Promise<PreparedUpload> {
@@ -111,7 +169,7 @@ export async function publishPrepared(
   signer: SubstrateSigner,
   onStage: (stage: PublishStage, detail?: string) => void,
   overrides: PublishOverrides = {},
-  opts: { scanTimeoutMs?: number; confirmTimeoutMs?: number; depth?: number; walletTimeoutMs?: number; persist?: boolean; recovery?: PreparedUpload; confirmTransaction?: (submit: () => Promise<Inclusion>) => Promise<Inclusion>; beforeSign?: () => Promise<void> } = {},
+  opts: { scanTimeoutMs?: number; confirmTimeoutMs?: number; depth?: number; walletTimeoutMs?: number; persist?: boolean; recovery?: PreparedUpload; confirmTransaction?: (submit: () => Promise<Inclusion>, batchIndex?: number, totalBatches?: number) => Promise<Inclusion>; beforeSign?: () => Promise<void>; onChunkFailure?: (info: ChunkFailureInfo) => Promise<'retry' | 'shrink' | 'abort'> } = {},
 ): Promise<Manifest> {
   const remarkTxs = (): SubmittableExtrinsic<'promise'>[] =>
     [...prepared.nodes, ...(opts.recovery?.nodes ?? [])].map((n) => api.tx.system.remark(makeRemarkPayload(n.bytes)))
@@ -150,6 +208,8 @@ export async function publishPrepared(
     currentHashes: string[],
     currentNodes: number[],
     nodeCount: number,
+    batchIndex = 0,
+    totalBatches = 1,
   ): Promise<Inclusion> => {
     const submit = async () => {
       await opts.beforeSign?.()
@@ -157,7 +217,7 @@ export async function publishPrepared(
       // Autonomys nonce semantics: accountNextIndex returning a huge value (about
       // the chain height) is normal — sign with it directly (same as the official backend)
       const nonce = (await beforeBroadcastDeadline(api.rpc.system.accountNextIndex(signer.address), 90_000, t('walletSteps.rpcTimeout'))).toNumber()
-      onStage('signing')
+      onStage('signing', totalBatches > 1 ? `batch ${batchIndex + 1}/${totalBatches}` : undefined)
       // local signers sign with the KeyringPair (payload built by api.registry);
       // extension signers go through Signer.signPayload inside the wallet
       await beforeBroadcastDeadline(signer.pair
@@ -170,30 +230,55 @@ export async function publishPrepared(
       await putPublishTask(task([...currentHashes, tx.hash.toHex()], [...currentNodes, nodeCount], 'pending-verify', null))
       return submitAndWaitConfirmed(api, tx, { ...opts, onStage: (s) => onStage(s as PublishStage) })
     }
-    return opts.confirmTransaction ? opts.confirmTransaction(submit) : submit()
+    return opts.confirmTransaction ? opts.confirmTransaction(submit, batchIndex, totalBatches) : submit()
   }
 
   const inclusions: Inclusion[] = []
-  try {
-    const batch = opts.recovery ? api.tx.utility.batchAll(remarkTxs()) : api.tx.utility.batch(remarkTxs())
-    inclusions.push(await submitTx(batch, [], [], prepared.nodes.length + (opts.recovery?.nodes.length ?? 0)))
-  } catch (e) {
-    const message = (e as Error).message ?? ''
-    const rejected = e instanceof TxRejectedError
-    const capacityReject = rejected && BATCH_CAPACITY_RE.test(message) && !MAYBE_RECEIVED_RE.test(message)
-    if (opts.recovery || !capacityReject) {
-      // pending verification (submitted but timed out / lost response / confirm
-      // failed) or another definitive rejection (banned etc.): the task is
-      // persisted — rescan by hash; never degrade and resend
-      throw e
-    }
-    // definitive capacity/format rejection (a synchronous node rejection proves
-    // non-acceptance) → drop the batch hash, degrade to per-tx
-    await putPublishTask(task([], [], 'pending-verify', `batch rejected: ${message}`))
-    onStage('signing', t('stage.batchFallback'))
-    for (const tx of remarkTxs()) {
-      const inc = await submitTx(tx, inclusions.map((i) => i.txHash), inclusions.map(() => 1), 1)
-      inclusions.push(inc)
+  const remarks = remarkTxs()
+  const nodeCounts: number[] = [] // remark count carried by each confirmed batch (F02 txNodes)
+  let budget = MAX_BATCH_ENCODED_BYTES
+  let offset = 0 // prefix length of remarks covered by confirmed batches
+  while (offset < remarks.length) {
+    const groups = planBatches(remarks.slice(offset), (tx) => tx.encodedLength, budget)
+    const txs = groups.map((g) => (g.length > 1 ? (opts.recovery ? api.tx.utility.batchAll(g) : api.tx.utility.batch(g)) : g[0]))
+    let i = 0
+    while (i < txs.length) {
+      try {
+        inclusions.push(await submitTx(txs[i], inclusions.map((x) => x.txHash), [...nodeCounts], groups[i].length, i, txs.length))
+        nodeCounts.push(groups[i].length)
+        offset += groups[i].length
+        i++
+      } catch (e) {
+        if (!isShrinkableFailure(e)) throw e // result unknown / other rejection: the task is persisted (incl. the failed batch hash, possibly pooled) — rescan by hash
+        if (opts.recovery) {
+          // multi-batch + recovery (main path): provably not sent → interactive decision
+          if (!opts.onChunkFailure) throw e
+          const decision = await opts.onChunkFailure({ batchIndex: i, totalBatches: txs.length, canShrink: budget > MIN_BATCH_ENCODED_BYTES, error: e })
+          if (decision === 'abort') {
+            // the failed batch's hash was persisted after signing — provably not
+            // sent, strip the phantom hash before halting
+            await putPublishTask(task(inclusions.map((x) => x.txHash), [...nodeCounts], 'pending-verify', (e as Error).message))
+            throw e
+          }
+          if (decision === 'shrink' && budget > MIN_BATCH_ENCODED_BYTES) {
+            budget = Math.max(MIN_BATCH_ENCODED_BYTES, Math.floor(budget / 2))
+            onStage('signing', t('stage.batchShrink', [(budget / (1024 * 1024)).toFixed(1)]))
+            break // the outer while regroups the uncovered remarks at the new budget (confirmed batches are never resent or repaid)
+          }
+          continue // retry: re-sign and resubmit the same batch (provably not sent → safe)
+        }
+        // no-recovery path (legacy: manifest-file publishing and other tiny
+        // manifests): definitive capacity rejection → degrade to per-tx for the
+        // uncovered remarks (confirmed batch hashes are kept; F02 unchanged)
+        await putPublishTask(task(inclusions.map((x) => x.txHash), [...nodeCounts], 'pending-verify', `batch rejected: ${(e as Error).message}`))
+        onStage('signing', t('stage.batchFallback'))
+        for (const tx of remarks.slice(offset)) {
+          const inc = await submitTx(tx, inclusions.map((x) => x.txHash), inclusions.map(() => 1), 1)
+          inclusions.push(inc)
+        }
+        offset = remarks.length
+        break
+      }
     }
   }
 

@@ -14,7 +14,7 @@ import { useSigner } from '../signer-context'
 import { Hint } from '../components/Hint'
 import { ChainTag } from '../components/ChainTag'
 import { formatBytes, sha256Hex } from '../lib/bytes'
-import { estimateFee, prepareUpload, publishPrepared, type PreparedUpload, type PublishOverrides, type PublishStage } from '../lib/publish'
+import { estimateFee, estimateBatchCount, prepareUpload, publishPrepared, type ChunkFailureInfo, type PreparedUpload, type PublishOverrides, type PublishStage } from '../lib/publish'
 import { signEvmMessage } from '../lib/vault'
 import {
   addPassphraseChannel,
@@ -27,11 +27,13 @@ import type { Manifest } from '../lib/manifest'
 import { stampFileOwner } from '../lib/fileOwnership'
 import { nodeCount, t, useI18n } from '../i18n'
 
-// Per-file cap = the single-signature tier: 8 MiB = 128×64 KiB nodes; the batch
-// extrinsic encodes to ~8.4 MB, safely under the measured 10 MiB per-extrinsic
-// ceiling (a full 10 MiB file would graze it). Larger files need multi-batch
-// publishing with resume (planned desktop/CLI roadmap).
-const MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+// Per-file cap (dynamic batching since 2026-11-03): 64 MiB = ~15 batches of
+// the 4.4 MB budget, one wallet signature per batch (the confirm panel
+// previews the signature count from the file length). The budget encodes to
+// ~8.8 MB hex POST, inside the public gateways' ~15 MB body cap. Larger files
+// belong to the desktop/CLI roadmap (browser memory ~3x the file plus
+// per-batch confirmation time are the web's practical bounds).
+const MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
 interface UploadSession {
   fileName: string
@@ -71,6 +73,10 @@ export function UploadCard({
   // Encrypted by default: sharing is a later action in the file panel, not an
   // upload-time decision; plaintext is an explicit (advanced) choice
   const [uploadPassphrase, setUploadPassphrase] = useState('')
+  // Dynamic-batch failure decision: "provably not sent" failures raise a
+  // three-way prompt whose Promise resolves publishPrepared's onChunkFailure;
+  // "result unknown" never prompts (verification flow only)
+  const [chunkPrompt, setChunkPrompt] = useState<{ info: ChunkFailureInfo; resolve: (d: 'retry' | 'shrink' | 'abort') => void } | null>(null)
   const confirming = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -159,7 +165,16 @@ export function UploadCard({
           setUpload((cur) => (cur ? { ...cur, stage, detail } : cur))
         },
         overrides,
-        { recovery, confirmTransaction: (submit) => runWalletAction(t('walletSteps.upload'), `${t('walletSteps.uploadHelp', [combinedFee.ai3.toFixed(6)])} ${t('onboarding.localRisk')}`, submit) },
+        {
+          recovery,
+          confirmTransaction: (submit, batchIndex, totalBatches) =>
+            runWalletAction(
+              batchIndex !== undefined && totalBatches !== undefined && totalBatches > 1 ? t('walletSteps.uploadBatch', [batchIndex + 1, totalBatches]) : t('walletSteps.upload'),
+              `${t('walletSteps.uploadHelp', [combinedFee.ai3.toFixed(6)])} ${t('onboarding.localRisk')}`,
+              submit,
+            ),
+          onChunkFailure: (info) => new Promise((resolve) => setChunkPrompt({ info, resolve })),
+        },
       )
       // publishPrepared already persisted the manifest in the same transaction
       // that deleted the task (F03)
@@ -220,6 +235,17 @@ export function UploadCard({
             <strong>{upload.fileName}</strong>
             <span className="muted">{formatBytes(upload.fileSize)}</span>
           </div>
+          {chunkPrompt && (
+            <div className="confirm-panel">
+              <p className="warning">{t('files.chunkPromptTitle')}</p>
+              <p className="privacy-note">{t('files.chunkPromptHelp')}</p>
+              <div className="row">
+                <button className="btn" onClick={() => { chunkPrompt.resolve('retry'); setChunkPrompt(null) }}>{t('files.chunkRetry')}</button>
+                <button className="btn" disabled={!chunkPrompt.info.canShrink} onClick={() => { chunkPrompt.resolve('shrink'); setChunkPrompt(null) }}>{t('files.chunkShrink')}</button>
+                <button className="btn ghost" onClick={() => { chunkPrompt.resolve('abort'); setChunkPrompt(null) }}>{t('files.chunkAbort')}</button>
+              </div>
+            </div>
+          )}
           {upload.stage === 'awaiting-confirm' && upload.prepared && upload.fee ? (
             <div className="confirm-panel">
               <div className="kv">
@@ -262,7 +288,7 @@ export function UploadCard({
                 </div>
               )}
               <p className="privacy-note">{t('files.initialEstimateHelp')}</p>
-              <p className="privacy-note">{t('files.signaturePlan')}</p>
+              <p className="privacy-note">{t('files.signaturePlan', [estimateBatchCount(upload.prepared.totalBytes + upload.prepared.nodes.length * 160 + 1024)])}</p>
               <p className="warning">{t('onboarding.localRisk')}</p>
               <p className="warning">{t('files.warningPermanent')}</p>
               {upload.encrypt ? (

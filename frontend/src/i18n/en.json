@@ -63,7 +63,8 @@
     "keyWrap": "wrapping file key (may ask for a signature twice)…",
     "reorgRescan": "Inclusion block reorged away — rescanning the lookback window (attempt {0})",
     "submitted": "Submitted to node (awaiting confirmation — never auto-resent)",
-    "submitViaWs": "large transaction: submitting over WebSocket…"
+    "submitViaWs": "large transaction: submitting over WebSocket…",
+    "batchShrink": "chunk size halved to {0} MB — regrouping remaining parts…"
   },
   "theme": {
     "light": "Light",
@@ -99,7 +100,7 @@
     "uploadTitle": "Upload",
     "chooseFile": "Choose file",
     "dropHint": "or drag and drop here · single file ≤ {0}",
-    "maxSizeError": "Per-file limit is {0} (chunked uploads for larger files are planned)",
+    "maxSizeError": "Per-file limit is {0} (uploaded in ~4 MB chunks, one signature each)",
     "rootCid": "root CID",
     "ipldNodes": "IPLD nodes",
     "nodesOnChain": "{0} · {1} on chain",
@@ -177,7 +178,7 @@
     "shareBtn": "Share",
     "thShare": "Share",
     "passphraseHelp": "Normally, unlock with the same EVM wallet signature. This password is an alternative, not an extra required step. Set it before upload and keep it safe: there is no reset. If your wallet signature is not reproducible, a backup password is required to complete upload.",
-    "signaturePlan": "Normally four wallet confirmations: set up wallet unlocking and check it is reproducible (two free message signatures); permanently save file and recovery information (consensus storage fee); register the wallet directory (EVM service fee and gas). Each wallet request requires a separate click.",
+    "signaturePlan": "Storage is uploaded in ~4 MB chunks, one wallet signature each: this file needs about {0} storage signatures, plus two free signature self-checks and one EVM directory registration. Each wallet request requires a separate click.",
     "initialEstimateHelp": "This is an initial estimate for file content. After setting up unlocking, the payment step shows a combined estimate including recovery information.",
     "saveStatus": "Save status",
     "saveComplete": "Complete",
@@ -192,7 +193,12 @@
     "storageTransaction": "Storage transaction",
     "indexDetails": "File index",
     "lastResult": "Latest result",
-    "connectDirectory": "Connect your Auto-EVM directory account above to view and save files."
+    "connectDirectory": "Connect your Auto-EVM directory account above to view and save files.",
+    "chunkPromptTitle": "This chunk was rejected before reaching the chain (size not accepted by the RPC endpoint)",
+    "chunkPromptHelp": "Nothing was broadcast, so no fee was paid. Resend the same chunk, halve the chunk size for the remaining parts, or stop (already-saved chunks stay on chain; verify them later from the file list).",
+    "chunkRetry": "Resend chunk",
+    "chunkShrink": "Halve chunk size",
+    "chunkAbort": "Stop uploading"
   },
   "notes": {
     "title": "Notes",
@@ -673,7 +679,7 @@
     "unlock": "Wallet unlock signature {0}/2",
     "unlockHelp": "Your EVM wallet will sign a message to unlock this file later. No transaction or fee. Two identical signatures check that this wallet can reproduce the key. Click again for the next step.",
     "upload": "Pay and permanently save file and recovery information",
-    "uploadHelp": "Your consensus wallet will sign one transaction saving both the encrypted file and recovery information. Combined storage estimate: {0} AI3 (check the wallet amount). Storage is permanent. Next, register the directory on EVM to find the file from your wallet on another device.",
+    "uploadHelp": "Your consensus wallet signs one transaction per ~4 MB chunk, saving the encrypted file and recovery information. Combined storage estimate: {0} AI3 (check the wallet amount). Storage is permanent. Next, register the directory on EVM to find the file from your wallet on another device.",
     "manifest": "Pay and save recovery information",
     "manifestHelp": "Your consensus wallet will sign a separate storage transaction to save file locations and protected key information for recovery on another device. A small additional storage fee applies; check the wallet amount.",
     "register": "Pay and register file directory",
@@ -687,7 +693,8 @@
     "currentTitle": "Current wallet step",
     "preparing": "Preparing transaction · waiting for Consensus RPC; the wallet has not been requested yet.",
     "rpcTimeout": "Consensus RPC did not respond in time. No transaction was submitted. Wait before retrying.",
-    "signTimeout": "Wallet signing timed out. This attempt will not broadcast. Reject any outstanding request in your wallet before retrying."
+    "signTimeout": "Wallet signing timed out. This attempt will not broadcast. Reject any outstanding request in your wallet before retrying.",
+    "uploadBatch": "Save chunk {0}/{1} to the blockchain (consensus storage fee)"
   },
   "resume": {
     "local": "Reading saved recovery information…",

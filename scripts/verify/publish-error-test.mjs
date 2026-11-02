@@ -112,6 +112,21 @@ function mockApi(scenario) {
         },
       },
       utility: {
+        batchAll: (calls) => {
+          const hash = `0xad0c${String(++batchCounter).padStart(62, '0')}`
+          const innerCalls = calls.map((c) => c.method)
+          const call = { section: 'utility', method: 'batchAll', args: [innerCalls] }
+          const tx = {
+            hash: { toHex: () => hash },
+            encodedLength: 1024,
+            toHex: () => hash,
+            signAsync: async () => { if (scenario.rejectSign) throw new Error('user rejected signing') },
+            method: call,
+            args: [innerCalls],
+          }
+          txRegistry.set(hash, tx)
+          return tx
+        },
         batch: (calls) => {
           const hash = `0xad0b${String(++batchCounter).padStart(62, '0')}`
           const innerCalls = calls.map((c) => c.method)
@@ -245,7 +260,7 @@ const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
   }
   ok(manifest !== null, 'S4 capacity rejection degraded to per-tx successfully')
   ok(manifest?.txs?.length === 3, `S4 manifest holds 3 per-tx transactions (${manifest?.txs?.length})`)
-  ok(scenario.remarkCalls === 6, `S4 6 remark calls (3 batch + 3 per-tx)`)
+  ok(scenario.remarkCalls === 3, `S4 3 remark constructions (built once, reused by the per-tx fallback — behaviorally identical)`)
   ok(scenario.batchRejected === true, 'S4 batch-rejected flag hit')
   const pending = await listPendingPublish()
   ok(!pending.some((p) => p.rootCid === sc4cid), 'S4 recovery task cleaned up after full confirmation')
@@ -621,8 +636,11 @@ const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
   const scenario = { submits: [], chain: [], remarkCalls: 0, remarkHashes: [] }
   const api = mockApi(scenario)
   let release
-  const original = api.tx.utility.batch
-  api.tx.utility.batch = (...args) => {
+  // dynamic batching (2026-11-03) sends a bare remark for a 1-remark group —
+  // the hanging patch follows the actually submitted object; the intent is
+  // unchanged: signing timeout boundary + a late signature never broadcasts
+  const original = api.tx.system.remark
+  api.tx.system.remark = (...args) => {
     const tx = original(...args)
     tx.signAsync = () => new Promise(resolve => { release = resolve })
     return tx

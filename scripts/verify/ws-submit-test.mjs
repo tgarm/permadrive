@@ -29,7 +29,7 @@ ok(wsUrlFromHttpUrl('http://127.0.0.1:9944/ws') === 'ws://127.0.0.1:9944/ws', 'h
 ok(wsUrlFromHttpUrl('wss://rpc.mainnet.autonomys.xyz/ws') === 'wss://rpc.mainnet.autonomys.xyz/ws', 'wss passthrough')
 
 // ---- Threshold decision ----
-ok(WS_SUBMIT_THRESHOLD_BYTES === 4 * 1024 * 1024, 'threshold is 4 MiB')
+ok(WS_SUBMIT_THRESHOLD_BYTES === 6 * 1024 * 1024, 'threshold is 6 MiB (HTTP gateway-safe under ~15MB body cap)')
 ok(!useWsSubmit(WS_SUBMIT_THRESHOLD_BYTES), 'at threshold → HTTP path')
 ok(!useWsSubmit(WS_SUBMIT_THRESHOLD_BYTES - 1), 'below threshold → HTTP path')
 ok(useWsSubmit(WS_SUBMIT_THRESHOLD_BYTES + 1), 'above threshold → WS path')
