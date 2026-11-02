@@ -1,13 +1,16 @@
 // Chain interaction: connect (HTTP, no subscriptions, throttled throughout),
 // block scanning for remarks, submission and final-state confirmation.
 // No WS subscriptions because public nodes repeatedly drop with 1006 under
-// continuous subscriptions/requests (observed). Confirmation strategy:
+// continuous subscriptions/requests (observed). One exception: submissions of
+// oversized extrinsics go over a single-shot short-lived WS connection
+// (rpc.ts submitRpcOverWs) — the public RPC gateways cap HTTP request bodies
+// at ~15 MB, which an 8 MiB-tier batch always exceeds. Confirmation strategy:
 // confirmationDepth + canonical check — Autonomys finality can lag 15+ days,
 // waiting for finalized is not viable.
 
 import { ApiPromise } from '@polkadot/api'
 import type { SubmittableExtrinsic } from '@polkadot/api/types'
-import { PacedHttpProvider, RawRpc, sleep, SubmitResultUnknownError } from './rpc.ts'
+import { PacedHttpProvider, RawRpc, sleep, SubmitResultUnknownError, submitRpcOverWs, useWsSubmit, wsUrlFromHttpUrl } from './rpc.ts'
 import { tryDecodeRemark } from './dag.ts'
 import { t } from '../i18n/core.ts'
 
@@ -16,6 +19,13 @@ export interface ExtractResult {
   parentHash: string
   height: number
 }
+
+// The raw endpoint is needed for WS submission of oversized extrinsics; the
+// ApiPromise type does not expose its provider, so connectApi registers the
+// endpoint in a WeakMap (mocked apis / unregistered → no WS path, HTTP used).
+const apiEndpoints = new WeakMap<object, string>()
+
+export const apiEndpointOf = (api: ApiPromise): string | undefined => apiEndpoints.get(api as unknown as object)
 
 export async function connectApi(
   url: string,
@@ -27,7 +37,9 @@ export async function connectApi(
   await probe.call('system_chain', [])
 
   const provider = new PacedHttpProvider(url, { minIntervalMs })
-  return ApiPromise.create({ provider, noInitWarn: true })
+  const api = await ApiPromise.create({ provider, noInitWarn: true })
+  apiEndpoints.set(api as unknown as object, url)
+  return api
 }
 
 // Collect system.remark nodes from a set of calls (top-level extrinsics or
@@ -175,7 +187,19 @@ export async function submitAndWaitConfirmed(
   const startHeight = (await api.rpc.chain.getHeader()).number.toNumber()
   onStage?.('submitting', `${(tx.encodedLength / 1024).toFixed(1)} KiB, ${txHash.slice(0, 18)}…`)
   try {
-    await api.rpc.author.submitExtrinsic(tx.toHex())
+    if (useWsSubmit(tx.encodedLength)) {
+      // oversized extrinsic: the HTTP POST would hit the public gateway request
+      // body cap (413/timeout) — submit over a single-shot WS connection
+      const endpoint = apiEndpointOf(api)
+      if (endpoint) {
+        onStage?.('submitting', t('stage.submitViaWs'))
+        await submitRpcOverWs(wsUrlFromHttpUrl(endpoint), 'author_submitExtrinsic', [tx.toHex()])
+      } else {
+        await api.rpc.author.submitExtrinsic(tx.toHex())
+      }
+    } else {
+      await api.rpc.author.submitExtrinsic(tx.toHex())
+    }
   } catch (e) {
     if (e instanceof SubmitResultUnknownError) {
       // transport failure (timeout/disconnect/empty) — the tx may have reached

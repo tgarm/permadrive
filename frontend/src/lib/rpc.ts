@@ -184,6 +184,94 @@ export class RawRpc {
 // "result unknown" and are never auto-retried.
 const WRITE_METHODS = new Set(['author_submitExtrinsic', 'author_submitAndWatchExtrinsic', 'author_pendingExtrinsics'])
 
+// ---- Single-shot WS submission for oversized extrinsics (measured on mainnet,
+// 2026-11-02) ----
+// The public RPC gateways cap HTTP request bodies at ~15 MB (14 MB passes /
+// 16 MB returns 413 on both domains), while a single utility.batch for an
+// 8 MiB file encodes to ~16.8 MB of hex and always hits the cap. The WS
+// channel was verified to accept 17 MB messages on both domains. Policy:
+// small transactions keep the throttled HTTP path (unchanged); submissions
+// above the threshold open a short-lived WS connection for a single
+// send/receive — no subscriptions, no polling (public nodes drop persistent
+// subscribers with 1006). Failure semantics match tx-write methods: a
+// JSON-RPC error is an explicit node rejection (rethrown as-is); a timeout or
+// disconnect means "result unknown" and is never auto-retried.
+
+/** Extrinsics larger than this (4 MB) are submitted over WS: a 4 MB
+ * extrinsic = an 8 MB hex POST, the conservative safe boundary under the
+ * gateway limit and the 30s timeout on the HTTP path */
+export const WS_SUBMIT_THRESHOLD_BYTES = 4 * 1024 * 1024
+
+export const useWsSubmit = (encodedLength: number): boolean => encodedLength > WS_SUBMIT_THRESHOLD_BYTES
+
+export const wsUrlFromHttpUrl = (url: string): string =>
+  url.startsWith('https://') ? 'wss://' + url.slice(8) : url.startsWith('http://') ? 'ws://' + url.slice(7) : url
+
+interface WsLike {
+  addEventListener(type: string, fn: (ev: unknown) => void): void
+  send(data: string): void
+  close(): void
+}
+
+/** Single-shot JSON-RPC call: one send, one response. makeSocket is the
+ * offline injection seam; defaults to the global WebSocket (browser and
+ * Node 22+). Never retries: a lost response does not mean "not submitted". */
+export function submitRpcOverWs(
+  url: string,
+  method: string,
+  params: unknown[],
+  { timeoutMs = 120_000, makeSocket }: { timeoutMs?: number; makeSocket?: (url: string) => WsLike } = {},
+): Promise<unknown> {
+  const socket = (makeSocket ?? ((u: string) => new WebSocket(u) as unknown as WsLike))(url)
+  return new Promise((resolve, reject) => {
+    const id = 1
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      try { socket.close() } catch { /* ignore */ }
+      reject(new SubmitResultUnknownError(`submit result unknown: ws timeout after ${timeoutMs}ms`))
+    }, timeoutMs)
+    socket.addEventListener('open', () => {
+      try {
+        socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
+      } catch (e) {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(new SubmitResultUnknownError(`submit result unknown: ws send failed: ${(e as Error).message}`))
+      }
+    })
+    socket.addEventListener('message', (ev: unknown) => {
+      let msg: { id?: number; result?: unknown; error?: { message?: string; code?: number; data?: unknown } }
+      try {
+        msg = JSON.parse(String((ev as { data: unknown }).data))
+      } catch {
+        return // ignore non-JSON frames; wait for the real response
+      }
+      if (msg.id !== id) return
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try { socket.close() } catch { /* ignore */ }
+      if (msg.error) reject(new RpcError(msg.error.message ?? 'rpc error', msg.error))
+      else resolve(msg.result)
+    })
+    socket.addEventListener('close', () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(new SubmitResultUnknownError('submit result unknown: ws closed before response'))
+    })
+    socket.addEventListener('error', () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(new SubmitResultUnknownError('submit result unknown: ws error'))
+    })
+  })
+}
+
 export class PacedHttpProvider extends HttpProvider {
   private paced: Pacer
   private maxRetries: number

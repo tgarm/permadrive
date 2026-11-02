@@ -62,7 +62,8 @@
     "batchFallback": "单笔超限，分批逐笔签名…",
     "keyWrap": "生成文件密钥包裹（可能需两次签名）…",
     "reorgRescan": "包含块被重组，回退窗口重扫（第 {0} 次）",
-    "submitted": "已提交节点（待确认 —— 结果不会自动重发）"
+    "submitted": "已提交节点（待确认 —— 结果不会自动重发）",
+    "submitViaWs": "大交易：经 WebSocket 提交…"
   },
   "theme": {
     "light": "亮色",

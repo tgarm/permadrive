@@ -62,7 +62,8 @@
     "batchFallback": "single tx rejected, falling back to per-tx signing…",
     "keyWrap": "wrapping file key (may ask for a signature twice)…",
     "reorgRescan": "Inclusion block reorged away — rescanning the lookback window (attempt {0})",
-    "submitted": "Submitted to node (awaiting confirmation — never auto-resent)"
+    "submitted": "Submitted to node (awaiting confirmation — never auto-resent)",
+    "submitViaWs": "large transaction: submitting over WebSocket…"
   },
   "theme": {
     "light": "Light",
