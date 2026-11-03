@@ -164,6 +164,8 @@ const MAYBE_RECEIVED_RE = /banned|already imported|usurped|future|not found|time
 export interface PublishOverrides {
   file?: Partial<Manifest['file']>
   encryption?: ManifestEncryption | null
+  /** Version note (2026-11-03, optional): stored on-chain with the version content */
+  note?: string
 }
 
 export async function publishPrepared(
@@ -191,6 +193,7 @@ export async function publishPrepared(
     file: prepared.file,
     overridesFile: overrides.file ? { ...overrides.file } : null,
     encryption: overrides.encryption ?? null,
+    ...(overrides.note ? { note: overrides.note } : {}),
     nodes: prepared.nodes.map((n) => ({ cid: n.cid, blake3: n.blake3, bytes: n.bytes.length })),
     ...(opts.recovery ? { recovery: { manifestCid: opts.recovery.rootCid, nodes: opts.recovery.nodes.map((n) => ({ cid: n.cid, blake3: n.blake3, bytes: n.bytes.length })) } } : {}),
     totalBytes: prepared.totalBytes + (opts.recovery?.totalBytes ?? 0),
@@ -291,6 +294,7 @@ export async function publishPrepared(
   const manifest: Manifest = {
     ...(opts.recovery ? { recovery: { manifestCid: opts.recovery.rootCid } } : {}),
     version: 2, // new publishes are v2 from here (encryption null = plain upload, a v1 superset)
+    ...(overrides.note ? { note: overrides.note } : {}),
     network: /mainnet/i.test(chainName) ? 'mainnet' : chainName,
     rootCid: prepared.rootCid,
     file: { ...prepared.file, ...overrides.file },
@@ -384,6 +388,7 @@ export async function verifyPublishTask(
   const manifest: Manifest = {
     ...(record.recovery ? { recovery: { manifestCid: record.recovery.manifestCid } } : {}),
     version: 2,
+    ...(record.note ? { note: record.note } : {}),
     network: /mainnet/i.test(chainName) ? 'mainnet' : chainName,
     rootCid: record.rootCid,
     file: { ...record.file, ...(record.overridesFile as Partial<Manifest['file']> | null) } as Manifest['file'],

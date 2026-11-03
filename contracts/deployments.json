@@ -85,5 +85,21 @@
     "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
     "sales": "0xe2fb274a3c82d6ef88ac22c3eba201b667f34ade",
     "deployedAt": "2026-10-31T17:18:00.458Z"
+  },
+  "auto-evm-mainnet-file-state": {
+    "chainId": 870,
+    "address": "0xb99b95369106b92e6b1b4b28bd702358608912a9",
+    "txHash": "0x8cc9d2f80e6a33d2abdf960358e0387ca39f422497a9e47ae745f61b645d49d1",
+    "blockNumber": "5363752",
+    "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "deployedAt": "2026-11-03T03:42:01.073Z"
+  },
+  "auto-evm-mainnet-file-state-test": {
+    "chainId": 870,
+    "address": "0xb993835a04dca94fc64be7dd0923818d58786331",
+    "txHash": "0x6646699ce01872fa37e9249c5fb3894bf32fc4c6771aa8bf44363dc79b09635a",
+    "blockNumber": "5363756",
+    "deployer": "0x47cE1B1A2D6bB34FdBaf0a772694f72bA3d0668e",
+    "deployedAt": "2026-11-03T03:42:45.301Z"
   }
 }

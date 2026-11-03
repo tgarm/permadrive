@@ -31,6 +31,7 @@ import {
 } from '../lib/discover'
 import { recoverManifestFromHint } from '../lib/manifestRecover'
 import { decryptAndSavePublic } from '../lib/publicDownload'
+import { useConfirmDialog } from './ConfirmDialog'
 import { useI18n } from '../i18n'
 
 type Feed = 'latest' | 'hot' | 'followed' | 'saved'
@@ -56,6 +57,7 @@ export function DiscoverPage() {
   const [busyCid, setBusyCid] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const { openConfirm, dialog: confirmDialog } = useConfirmDialog()
 
   const reload = useCallback(async () => {
     setError(null)
@@ -93,7 +95,7 @@ export function DiscoverPage() {
     try {
       const api = await connect()
       const manifest = await recoverManifestFromHint(api, item.manifestCid, Number(item.manifestHeightHint))
-      await decryptAndSavePublic(api, manifest, fromHex(item.key), say, item)
+      await decryptAndSavePublic(api, manifest, fromHex(item.key), say, item, (message) => openConfirm({ title: t('share.integrityExportTitle'), body: message, confirmLabel: t('files.exportAnyway'), danger: true }))
       // backfill the file name after the first successful download (events and bookmarks carry no name)
       await setBookmarkName(item.manifestCid, manifest.file.name)
       setBookmarks(await listBookmarks())
@@ -227,6 +229,7 @@ export function DiscoverPage() {
         )}
         {notice && <div className="notice">{notice}</div>}
         <p className="muted small-text">{t('discover.footer')}</p>
+        {confirmDialog}
       </section>
     </div>
   )

@@ -73,6 +73,9 @@ export function UploadCard({
   // Encrypted by default: sharing is a later action in the file panel, not an
   // upload-time decision; plaintext is an explicit (advanced) choice
   const [uploadPassphrase, setUploadPassphrase] = useState('')
+  // Version note (2026-11-03, optional): stored on-chain with the version
+  // content forever; finalized at upload time under content addressing
+  const [uploadNote, setUploadNote] = useState('')
   // Dynamic-batch failure decision: "provably not sent" failures raise a
   // three-way prompt whose Promise resolves publishPrepared's onChunkFailure;
   // "result unknown" never prompts (verification flow only)
@@ -151,6 +154,8 @@ export function UploadCard({
         requireChannel(u.encSession)
         overrides = { file: { sha256: u.plainSha256, size: u.plainSize, mimeType: u.plainMimeType }, encryption: u.encSession.encryption }
       }
+      const note = uploadNote.trim()
+      if (note) overrides = { ...overrides, note }
       const recovery = await prepareRecoveryManifest(u.prepared, overrides, (await api.rpc.system.chain()).toString(), activeSigner.address)
       const combinedFee = await estimateFee(api, u.prepared.totalBytes + recovery.totalBytes)
       const currentFunds = (await api.query.system.account(activeSigner.address)).toJSON() as unknown as { data: { free: string; frozen?: string } }
@@ -182,6 +187,7 @@ export function UploadCard({
       if (evmSigner) await stampFileOwner(manifest.rootCid, evmSigner.address)
       setUpload(null)
       setUploadPassphrase('')
+      setUploadNote('')
       onPublished(manifest)
     } catch (e) {
       setUpload((cur) => (cur ? { ...cur, stage: 'error', error: (e as Error).message } : cur))
@@ -287,6 +293,18 @@ export function UploadCard({
                   <span>🌐 {t('files.plainBadge')}</span>
                 </div>
               )}
+              <div className="kv">
+                <label htmlFor="upload-version-note">{t('files.noteLabel')}</label>
+                <input
+                  id="upload-version-note"
+                  type="text"
+                  maxLength={200}
+                  value={uploadNote}
+                  placeholder={t('files.notePlaceholder')}
+                  onChange={(e) => setUploadNote(e.target.value)}
+                />
+              </div>
+              <p className="privacy-note">{t('files.noteHelp')}</p>
               <p className="privacy-note">{t('files.initialEstimateHelp')}</p>
               <p className="privacy-note">{t('files.signaturePlan', [estimateBatchCount(upload.prepared.totalBytes + upload.prepared.nodes.length * 160 + 1024)])}</p>
               <p className="warning">{t('onboarding.localRisk')}</p>

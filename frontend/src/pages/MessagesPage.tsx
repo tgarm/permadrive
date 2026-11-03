@@ -11,6 +11,7 @@ import { decryptMessage, decryptPendingMessages, ensureAnnounced, sendEncryptedM
 import { listMessages, markMessageRead, type MessageRecord } from '../lib/store'
 import { useI18n } from '../i18n'
 import { ChainTag } from '../components/ChainTag'
+import { useConfirmDialog } from './ConfirmDialog'
 
 const shortAddr = (a: string): string => `${a.slice(0, 8)}…${a.slice(-6)}`
 
@@ -26,11 +27,13 @@ export function MessagesPage() {
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [unlocking, setUnlocking] = useState<string | null>(null)
+  const { openConfirm, dialog: confirmDialog } = useConfirmDialog()
 
   const refresh = useCallback(async () => setMessages(await listMessages()), [])
 
   const enableReceiving = async () => {
-    if (!evm || busy || !window.confirm(t('messages.enableExplain'))) return
+    if (!evm || busy) return
+    if (!(await openConfirm({ title: t('messages.enableReceiving'), body: t('messages.enableExplain'), confirmLabel: t('messages.enableReceiving') }))) return
     setBusy(true)
     setStatus(t('messages.enableExplain'))
     try {
@@ -144,10 +147,10 @@ export function MessagesPage() {
 
   const send = async (recipient: string, text: string) => {
     if (!evm || !recipient || !text.trim()) return
+    if (!(await openConfirm({ title: t('messages.send'), body: t('messages.sendExplain'), confirmLabel: t('messages.send') }))) return
     setBusy(true)
     setStatus(t('messages.sendExplain'))
     try {
-      if (!window.confirm(t('messages.sendExplain'))) return
       const r = await sendEncryptedMessage(evm, recipient, text)
       setStatus(t('messages.sentTx', [r.txHash.slice(0, 14) + '…']))
       setDraft('')
@@ -189,6 +192,7 @@ export function MessagesPage() {
           {t('messages.enableReceiving')}
         </button>
         {status && <div className="notice">{status}</div>}
+        {confirmDialog}
         {!evm && <div className="notice">{t('messages.connectFirst')}</div>}
       </section>
 

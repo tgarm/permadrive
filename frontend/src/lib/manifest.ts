@@ -42,6 +42,11 @@ export interface Manifest {
   version: 1 | 2
   /** Recovery document published in the same transaction as the content. */
   recovery?: { manifestCid: string }
+  /** Version note (2026-11-03, optional): finalized at upload time, stored
+   *  on-chain with the version content forever; same privacy stance as
+   *  file.name (plaintext, public). Older manifests lack this field; under
+   *  content addressing it cannot be edited afterwards (editing = new version) */
+  note?: string
   network: string
   rootCid: string
   file: { name: string; size: number; sha256: string; mimeType: string | null }
@@ -103,6 +108,13 @@ export function validateManifest(m: unknown): string | null {
     const recovery = v.recovery as { manifestCid?: unknown } | null
     if (!recovery || typeof recovery.manifestCid !== 'string' || !CID_LIKE.test(recovery.manifestCid) || !Array.isArray(v.txs) || v.txs.length !== 1) {
       return t('errors.recoveryBatchIncomplete')
+    }
+  }
+  // Version note (optional field, absent on older manifests): when present it
+  // must be a string of at most 200 characters without control characters
+  if (v.note !== undefined) {
+    if (typeof v.note !== 'string' || v.note.length > 200 || /[\u0000-\u001f\u007f]/.test(v.note)) {
+      return t('errors.manifestNoteInvalid')
     }
   }
   if (!Array.isArray(v.txs) || v.txs.length === 0) return t('errors.manifestTxsEmpty')

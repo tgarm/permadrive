@@ -8,7 +8,10 @@
 // Consumers: SharePage deep-link landing (k from the link or the event),
 // Discover downloads (K from the event / local bookmark). The integrity gate
 // mirrors the files-page download (retrieve.ts / fileCrypto division of labor
-// unchanged).
+// unchanged). `confirm` is injected by the caller (pages pass the
+// promise-based dialog from useConfirmDialog): the lib layer never raises UI
+// directly, and the parameter is mandatory so the type checker forces every
+// call site to wire it (no native window.confirm leftovers).
 
 import type { ApiPromise } from '@polkadot/api'
 import { fromHex, sha256Hex } from './bytes.ts'
@@ -30,6 +33,7 @@ export async function decryptAndSavePublic(
   keyBytes: Uint8Array,
   say: (s: string) => void,
   declared: PublicDeclaration | null,
+  confirm: (message: string) => Promise<boolean>,
 ): Promise<void> {
   if (!manifest.encryption) throw new Error(t('errors.manifestNotEncrypted'))
   const result = await retrieveFile(api, manifest)
@@ -38,13 +42,13 @@ export async function decryptAndSavePublic(
   const plain = await aesGcmDecrypt(keyBytes, fromHex(manifest.encryption.iv), result.bytes)
   const plainSha = await sha256Hex(plain)
   if (plainSha !== manifest.file.sha256 || plain.length !== manifest.file.size) {
-    if (window.confirm(t('share.integrityBlockExport', [plainSha.slice(0, 16)]))) saveBlob(plain, manifest.file.name, manifest.file.mimeType)
+    if (await confirm(t('share.integrityBlockExport', [plainSha.slice(0, 16)]))) saveBlob(plain, manifest.file.name, manifest.file.mimeType)
     return
   }
   if (declared) {
     const evSha = declared.plainSha256.replace(/^0x/, '').toLowerCase()
     if (evSha !== plainSha || Number(declared.plainSize) !== plain.length) {
-      if (!window.confirm(t('share.eventMismatchExport'))) return
+      if (!(await confirm(t('share.eventMismatchExport')))) return
     }
   }
   saveBlob(plain, manifest.file.name, manifest.file.mimeType)

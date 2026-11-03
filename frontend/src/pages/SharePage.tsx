@@ -53,6 +53,7 @@ import { saveBlob } from '../lib/download'
 import type { Manifest } from '../lib/manifest'
 import type { ShareLinkParams } from '../lib/shareLink'
 import type { EvmSigner } from '../lib/wallet/types'
+import { useConfirmDialog } from './ConfirmDialog'
 import { useI18n } from '../i18n'
 
 const short = (a: string): string => (a ? `${a.slice(0, 8)}…${a.slice(-6)}` : '—')
@@ -117,6 +118,7 @@ function ShareLanding({ params }: { params: ShareLinkParams }) {
   const [busy, setBusy] = useState(false)
   const [quote, setQuote] = useState<{ price: bigint; revision: bigint; listingId: `0x${string}` } | null>(null)
   const [notListed, setNotListed] = useState(false)
+  const { openConfirm, dialog: confirmDialog } = useConfirmDialog()
 
   const say = setNotice
 
@@ -179,7 +181,7 @@ function ShareLanding({ params }: { params: ShareLinkParams }) {
       const api = await connect()
       const result = await retrieveFile(api, phase.manifest)
       if (!(result.sha256Match && result.bytes.length === phase.manifest.file.size)) {
-        if (!window.confirm(t('share.integrityBlockExport', [result.sha256.slice(0, 16)]))) return
+        if (!(await openConfirm({ title: t('share.integrityExportTitle'), body: t('share.integrityBlockExport', [result.sha256.slice(0, 16)]), confirmLabel: t('files.exportAnyway'), danger: true }))) return
       }
       saveBlob(result.bytes, phase.manifest.file.name, phase.manifest.file.mimeType)
       say(t('share.plainSaved', [result.sha256.slice(0, 16)]))
@@ -198,7 +200,7 @@ function ShareLanding({ params }: { params: ShareLinkParams }) {
       const keyHex0 = params.key ?? phase.event?.key ?? null
       if (!keyHex0) throw new Error(t('share.noKeyAvailable'))
       const api = await connect()
-      await decryptAndSavePublic(api, phase.manifest, fromHex(keyHex0), say, phase.event)
+      await decryptAndSavePublic(api, phase.manifest, fromHex(keyHex0), say, phase.event, (message) => openConfirm({ title: t('share.integrityExportTitle'), body: message, confirmLabel: t('files.exportAnyway'), danger: true }))
     } catch (e) {
       say(`✗ ${(e as Error).message}`)
     } finally {
@@ -222,7 +224,7 @@ function ShareLanding({ params }: { params: ShareLinkParams }) {
         say(t('sales.notListed'))
         return
       }
-      if (!window.confirm(t('sales.buyConfirm', [formatAi3(fresh.price)]))) return
+      if (!(await openConfirm({ title: t('sales.buy'), body: t('sales.buyConfirm', [formatAi3(fresh.price)]), confirmLabel: t('sales.buy') }))) return
       const currentKey = await encryptionPublicKeyFor(evm)
       if (currentKey !== announced) {
         say(t('sales.receiveKeyMismatch'))
@@ -307,6 +309,7 @@ function ShareLanding({ params }: { params: ShareLinkParams }) {
       {event && <p className="muted small-text">{t('share.eventLine', [event.txHash.slice(0, 18) + '…'])}</p>}
       {notice && <div className="notice">{notice}</div>}
       <p className="muted small-text">{t('share.landingFooter')}</p>
+      {confirmDialog}
     </div>
   )
 }
@@ -326,6 +329,7 @@ function MyPurchases() {
   const [votes, setVotes] = useState<Map<string, number>>(new Map())
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const { openConfirm, dialog: confirmDialog } = useConfirmDialog()
 
   const say = setNotice
 
@@ -391,7 +395,7 @@ function MyPurchases() {
         const localManifest = rec ? await getManifest(rec.rootCid) : undefined
         if (localManifest?.encryption) {
           const k = await unwrapManifestKey(evm, localManifest, () => Promise.resolve(null))
-          await decryptAndSavePublic(await connect(), localManifest, k, say, null)
+          await decryptAndSavePublic(await connect(), localManifest, k, say, null, (message) => openConfirm({ title: t('share.integrityExportTitle'), body: message, confirmLabel: t('files.exportAnyway'), danger: true }))
           return
         }
         say(t('sales.waitingDelivery'))
@@ -399,7 +403,7 @@ function MyPurchases() {
       }
       const api = await connect()
       const manifest = await recoverManifestFromHint(api, row.entry.manifestCid, Number(row.entry.height))
-      await decryptAndSavePublic(api, manifest, keyBytes, say, null)
+      await decryptAndSavePublic(api, manifest, keyBytes, say, null, (message) => openConfirm({ title: t('share.integrityExportTitle'), body: message, confirmLabel: t('files.exportAnyway'), danger: true }))
     } catch (e) {
       say(`✗ ${(e as Error).message}`)
     } finally {
@@ -416,7 +420,7 @@ function MyPurchases() {
       say(t('sales.rateNoOp'))
       return
     }
-    if (!window.confirm(t('sales.rateConfirm'))) return
+    if (!(await openConfirm({ title: positive ? t('sales.rateUp') : t('sales.rateDown'), body: t('sales.rateConfirm'), confirmLabel: positive ? t('sales.rateUp') : t('sales.rateDown') }))) return
     setBusy(true)
     try {
       await rateSales(evm, row.orderId, positive)
@@ -507,6 +511,7 @@ function MyPurchases() {
           </tbody>
         </table>
       )}
+      {confirmDialog}
     </section>
   )
 }

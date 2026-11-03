@@ -45,6 +45,7 @@ import {
 } from '../lib/manifestPublish'
 import type { Manifest } from '../lib/manifest'
 import type { RegistryRecord } from '../lib/store'
+import { useConfirmDialog } from './ConfirmDialog'
 import { useI18n } from '../i18n'
 
 const USER_REJECTED = /4001|UserRejected|user rejected|rejected the request|denied/i
@@ -84,6 +85,7 @@ export function SharePanel({ initialShareInfo, manifest, registryRecord, getPass
   const [confirmPublic, setConfirmPublic] = useState(false)
   const [pending, setPending] = useState<SalesOrderRow[]>([])
   const [busy, setBusy] = useState(false)
+  const { openConfirm, dialog: confirmDialog } = useConfirmDialog()
 
   const withBusy = useCallback(
     async (fn: () => Promise<void>) => {
@@ -174,7 +176,7 @@ export function SharePanel({ initialShareInfo, manifest, registryRecord, getPass
       } catch {
         /* read failure does not block delisting; only the history marker is lost */
       }
-      if (!window.confirm(t('share.delistConfirm', [String(buyers)]))) return
+      if (!(await openConfirm({ title: t('share.delist'), body: t('share.delistConfirm', [String(buyers)]), confirmLabel: t('share.delist'), danger: true }))) return
       await delistSales(evm, phase.manifestCid)
       if (buyers > 0) await markEverSold(manifest.rootCid)
       onNotice(t('sales.unlistedOk', [manifest.file.name]))
@@ -397,6 +399,7 @@ export function SharePanel({ initialShareInfo, manifest, registryRecord, getPass
           </div>
         </div>
       )}
+      {confirmDialog}
     </div>
   )
 }

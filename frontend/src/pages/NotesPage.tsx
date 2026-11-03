@@ -19,6 +19,7 @@ import { retrieveFile } from '../lib/retrieve'
 import { fetchEntries, quoteRegisterFee, registerFile } from '../lib/registry'
 import { deleteNote, getManifest, listNotes, putManifest, putNote, type NoteRecord, type NoteVersionRecord } from '../lib/store'
 import { stampFileOwner } from '../lib/fileOwnership'
+import { useConfirmDialog } from './ConfirmDialog'
 import { nodeCount, useI18n, versionCount } from '../i18n'
 
 interface SaveSession {
@@ -37,6 +38,7 @@ export function NotesPage() {
   const { t } = useI18n()
   const { connect } = useChain()
   const { active, evm } = useSigner()
+  const { openConfirm, dialog: confirmDialog } = useConfirmDialog()
   const [notes, setNotes] = useState<NoteRecord[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [title, setTitle] = useState('')
@@ -322,7 +324,7 @@ export function NotesPage() {
   }
 
   const removeNote = async (note: NoteRecord) => {
-    if (!window.confirm(t('notes.deleteConfirm', [note.title || t('common.untitled')]))) return
+    if (!(await openConfirm({ title: t('notes.deleteLocalTitle'), body: t('notes.deleteConfirm', [note.title || t('common.untitled')]), confirmLabel: t('common.delete'), danger: true }))) return
     await deleteNote(note.id)
     if (activeId === note.id) {
       setActiveId(null)
@@ -343,6 +345,7 @@ export function NotesPage() {
           </div>
         </div>
       )}
+      {confirmDialog}
       <div className="notes-grid">
         <section className="card">
           <div className="card-head">

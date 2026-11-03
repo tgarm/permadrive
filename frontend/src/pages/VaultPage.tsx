@@ -22,6 +22,7 @@ import { retrieveFile } from '../lib/retrieve'
 import { fetchEntries, quoteRegisterFee, registerFile } from '../lib/registry'
 import { getVault, putManifest, putVault, type VaultRecord, type VaultVersionRecord } from '../lib/store'
 import { stampFileOwner } from '../lib/fileOwnership'
+import { useConfirmDialog } from './ConfirmDialog'
 import { openPayload, unwrapWithPassphrase, type KeystoreFileV1 } from '../lib/vaultCrypto'
 import {
   createVaultEnvelope,
@@ -83,6 +84,7 @@ export function VaultPage() {
   const { t } = useI18n()
   const { connect } = useChain()
   const { active, evm } = useSigner()
+  const { openConfirm, dialog: confirmDialog } = useConfirmDialog()
   const [record, setRecord] = useState<VaultRecord | null>(null)
   // Session key and decrypted entries: memory only, lost on refresh (unlock again)
   const [vaultKey, setVaultKey] = useState<Uint8Array | null>(null)
@@ -262,9 +264,9 @@ export function VaultPage() {
     setNotice(null)
   }
 
-  const removeEntry = (id: string) => {
+  const removeEntry = async (id: string) => {
     if (!entries) return
-    if (!window.confirm(t('vault.deleteEntryConfirm'))) return
+    if (!(await openConfirm({ title: t('vault.deleteEntry'), body: t('vault.deleteEntryConfirm'), confirmLabel: t('common.delete'), danger: true }))) return
     setEntries(entries.filter((e) => e.id !== id))
   }
 
@@ -421,6 +423,7 @@ export function VaultPage() {
           </div>
         </div>
       )}
+      {confirmDialog}
 
       {/* create (no local record yet) */}
       {!record && !keystorePending && (
@@ -670,7 +673,7 @@ export function VaultPage() {
                         >
                           {t('common.edit')}
                         </button>
-                        <button className="btn ghost small danger" onClick={() => removeEntry(entry.id)}>
+                        <button className="btn ghost small danger" onClick={() => void removeEntry(entry.id)}>
                           {t('common.delete')}
                         </button>
                       </div>

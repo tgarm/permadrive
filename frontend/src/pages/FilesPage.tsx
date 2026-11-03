@@ -34,11 +34,11 @@ import { publishManifestToChain } from '../lib/manifestPublish'
 import { recoverManifestFromHint } from '../lib/manifestRecover'
 import { syncDirectoryFromRegistry, type DirectorySyncResult } from '../lib/directorySync'
 import { fetchEntries, getEvmBalance, quoteRegisterFee, registryPublicClient, registerFile } from '../lib/registry'
+import { fetchHiddenFlags, fileStateEnabled, setHiddenFile } from '../lib/fileState'
 import { IndexerClient } from '../lib/indexer'
 import { signEvmMessage } from '../lib/vault'
 import { decryptFileBytes } from '../lib/fileCrypto'
 import {
-  deleteManifest,
   deleteTask,
   getManifest,
   listManifests,
@@ -55,6 +55,7 @@ import { dismissPendingPublish, listPendingPublish, verifyPublishTask } from '..
 import { saveBlob } from '../lib/download'
 import { FilesTable } from './FilesTable'
 import { PassphrasePrompt } from './PassphrasePrompt'
+import { useConfirmDialog } from './ConfirmDialog'
 import { PendingPublishNotice } from './PendingPublishNotice'
 import { SharePanel } from './SharePanel'
 import { UploadCard } from './UploadCard'
@@ -102,6 +103,13 @@ function ConnectedFilesPage() {
   // three-state sharing: per-file on-chain derived badges + the share panel anchor
   const [shareInfos, setShareInfos] = useState<Map<string, ShareInfo>>(new Map())
   const [sharePanelRoot, setSharePanelRoot] = useState<string | null>(null)
+  // Hide (2026-11-03): the hide mark lives in the FileState contract (recovery
+  // on a new device lands it in the hidden group automatically) — locally we
+  // only cache the rootCid set (chain is the source of truth, refreshed on
+  // connect / reconcile / writes); "show hidden" is a pure UI preference
+  const [hiddenCids, setHiddenCids] = useState<Set<string>>(new Set())
+  const [showHidden, setShowHidden] = useState(() => localStorage.getItem('permadrive.showHidden') === '1')
+  const { openConfirm, dialog: confirmDialog } = useConfirmDialog()
   const { runWalletAction, walletStep, updateWalletProgress } = useWalletStep()
   const [operationRoot, setOperationRoot] = useState<string | null>(null)
   const resuming = useRef(false)
@@ -189,7 +197,7 @@ function ConnectedFilesPage() {
   }
 
   const dismissPending = async (record: PublishTaskRecord) => {
-    if (!window.confirm(t('publishPending.dismissConfirm'))) return
+    if (!(await openConfirm({ title: t('publishPending.dismiss'), body: t('publishPending.dismissConfirm'), confirmLabel: t('publishPending.dismiss'), danger: true }))) return
     await dismissPendingPublish(record)
     await refreshPendingPublish()
   }
@@ -270,9 +278,11 @@ function ConnectedFilesPage() {
       const result = await retrieveFile(api, manifest)
       // R09: verify before saving — a failed integrity check blocks the save by
       // default; a forensic export requires explicit confirmation
-      const exportUnverified = (bytes: Uint8Array, what: string): void => {
+      const exportUnverified = async (bytes: Uint8Array, what: string): Promise<void> => {
         setRowBusy((b) => ({ ...b, [manifest.rootCid]: t('files.integrityBlock', [what]) }))
-        if (window.confirm(t('files.exportUnverifiedConfirm'))) saveBlob(bytes, manifest.file.name, manifest.file.mimeType)
+        if (await openConfirm({ title: t('files.exportUnverified'), body: t('files.exportUnverifiedConfirm'), confirmLabel: t('files.exportAnyway'), danger: true })) {
+          saveBlob(bytes, manifest.file.name, manifest.file.mimeType)
+        }
       }
       if (manifest.encryption) {
         // v2 encrypted file: verify ciphertext integrity first (retrieve checks
@@ -284,7 +294,7 @@ function ConnectedFilesPage() {
         const plain = await decryptFileBytes(result.bytes, manifest.encryption, signMessage, openPassphrasePrompt)
         const plainSha = await sha256Hex(plain)
         if (plainSha !== manifest.file.sha256 || plain.length !== manifest.file.size) {
-          exportUnverified(plain, `sha256 ${plainSha.slice(0, 16)}…`)
+          await exportUnverified(plain, `sha256 ${plainSha.slice(0, 16)}…`)
           return
         }
         setVerifiedRoots((old) => new Set(old).add(manifest.rootCid))
@@ -293,7 +303,7 @@ function ConnectedFilesPage() {
         return
       }
       if (!result.sha256Match || result.bytes.length !== manifest.file.size) {
-        exportUnverified(result.bytes, result.sha256Match ? 'length' : `sha256 ${result.sha256.slice(0, 16)}…`)
+        await exportUnverified(result.bytes, result.sha256Match ? 'length' : `sha256 ${result.sha256.slice(0, 16)}…`)
         return
       }
       setVerifiedRoots((old) => new Set(old).add(manifest.rootCid))
@@ -513,11 +523,72 @@ function ConnectedFilesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const removeManifest = async (manifest: Manifest) => {
-    if (!window.confirm(t('files.deleteConfirm', [manifest.file.name]))) return
-    await deleteManifest(manifest.rootCid)
-    await deleteTask(manifest.rootCid)
-    await refresh()
+  // Hide/Unhide (2026-11-03): the hide mark is written to the FileState
+  // contract (recovery on a new device lands it in the hidden group
+  // automatically), the data layer never deletes — the local manifest is kept
+  // as usual and the table partitions on hiddenCids. manifestCid resolution:
+  // own Registry record first, falling back to the manifestPublish meta for
+  // published-but-unregistered files; if neither exists the file cannot be
+  // located on-chain (asked to sync the directory first).
+  const hideManifest = async (manifest: Manifest, hidden: boolean) => {
+    if (!evmSigner) return
+    setNotice(null)
+    const record = registryRecords.find((r) => r.rootCid === manifest.rootCid && r.evmAddress.toLowerCase() === evmSigner.address.toLowerCase())
+    const manifestCid = record?.manifestCid ?? (await getManifestPublishMeta(manifest.rootCid))?.manifestCid ?? null
+    if (!manifestCid) {
+      setNotice(t('files.hideNotRegistered', [manifest.file.name]))
+      return
+    }
+    if (hidden && !(await openConfirm({ title: t('files.hide'), body: t('files.hideConfirm', [manifest.file.name]), confirmLabel: t('files.hide'), danger: true }))) return
+    try {
+      setRowBusy((b) => ({ ...b, [manifest.rootCid]: t(hidden ? 'files.hiding' : 'files.unhiding') }))
+      await setHiddenFile(evmSigner, manifestCid, hidden)
+      setHiddenCids((prev) => {
+        const next = new Set(prev)
+        if (hidden) next.add(manifest.rootCid)
+        else next.delete(manifest.rootCid)
+        return next
+      })
+      setRowBusy((b) => ({ ...b, [manifest.rootCid]: '' }))
+      setNotice(t(hidden ? 'files.hiddenOk' : 'files.unhiddenOk', [manifest.file.name]))
+    } catch (e) {
+      setRowBusy((b) => ({ ...b, [manifest.rootCid]: `✗ ${(e as Error).message}` }))
+    }
+  }
+
+  // Hidden-set refresh (chain is the source of truth): manifestCid resolution
+  // as in hideManifest (record ?? publish meta); one batch hiddenFlags call
+  // fetches the whole hidden set → mapped back to rootCids. Triggered on
+  // mount / after reconciliation / after writes.
+  const refreshHiddenSet = useCallback(async () => {
+    if (!evmSigner || !fileStateEnabled() || manifests.length === 0) return
+    try {
+      const pairs = await Promise.all(
+        manifests.map(async (m) => {
+          const record = registryRecords.find((r) => r.rootCid === m.rootCid && r.evmAddress.toLowerCase() === evmSigner.address.toLowerCase())
+          const mc = record?.manifestCid ?? (await getManifestPublishMeta(m.rootCid))?.manifestCid ?? null
+          return mc ? ([mc, m.rootCid] as const) : null
+        }),
+      )
+      const cidMap = new Map(pairs.filter((p): p is readonly [string, string] => p !== null))
+      if (cidMap.size === 0) return
+      const hiddenManifestCids = await fetchHiddenFlags(evmSigner.address, [...cidMap.keys()])
+      setHiddenCids(new Set([...hiddenManifestCids].map((mc) => cidMap.get(mc)!).filter((rc): rc is string => rc !== undefined)))
+    } catch {
+      // a failed hidden-set read must not block the directory (treated as all
+      // visible; the next trigger retries)
+    }
+  }, [evmSigner, manifests, registryRecords])
+
+  useEffect(() => {
+    void refreshHiddenSet()
+  }, [refreshHiddenSet])
+
+  const toggleShowHidden = () => {
+    setShowHidden((v) => {
+      localStorage.setItem('permadrive.showHidden', v ? '0' : '1')
+      return !v
+    })
   }
 
   const taskByRoot = new Map(tasks.map((tk) => [tk.id, tk]))
@@ -574,6 +645,9 @@ function ConnectedFilesPage() {
         <div className="card-head">
           <h2>{t('files.myFiles')}</h2>
           <div className="row-actions">
+            <button className={`btn ghost small ${showHidden ? 'active' : ''}`} onClick={toggleShowHidden} title={t('files.showHiddenTitle')} hidden={!fileStateEnabled() || hiddenCids.size === 0}>
+              {t('files.showHidden', [hiddenCids.size])}
+            </button>
             <button className="btn ghost small" onClick={() => void runDirectorySync(false)} disabled={recoverBusy}>
               {t('files.refresh')}
             </button>
@@ -615,10 +689,14 @@ function ConnectedFilesPage() {
           syncing={syncing}
           canSync={!!evmSigner}
           shareInfoByRoot={shareInfos}
+          hiddenRootCids={hiddenCids}
+          showHidden={showHidden}
+          hideEnabled={fileStateEnabled() && !!evmSigner}
           sharePanelRoot={sharePanelRoot}
           onDownload={(m) => void download(m)}
           onSync={(m) => void syncToRegistry(m, true)}
-          onDelete={(m) => void removeManifest(m)}
+          onHide={(m) => void hideManifest(m, true)}
+          onUnhide={(m) => void hideManifest(m, false)}
           onShare={(m) => setSharePanelRoot((cur) => (cur === m.rootCid ? null : m.rootCid))}
         />
         {/* unowned group: files with unclear ownership (older local uploads or
@@ -684,6 +762,7 @@ function ConnectedFilesPage() {
         })()}
 
       {passPrompt && <PassphrasePrompt prompt={passPrompt} onResolve={(v) => { passPrompt.resolve(v); setPassPrompt(null) }} />}
+      {confirmDialog}
     </div>
   )
 }

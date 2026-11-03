@@ -32,6 +32,11 @@ export interface AppConfig {
    *  are trusted; cursor keys include this address. */
   publicPublisherAddress: string
   publicPublisherDeployBlock: number
+  /** FileState directory state layer (2026-11-03) — hide marks + a generic
+   *  per-file property layer (reserved for diff/compression). When empty, the
+   *  hide feature is entirely disabled (no Hide button; plain local directory). */
+  fileStateAddress: string
+  fileStateDeployBlock: number
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -53,6 +58,10 @@ export const DEFAULT_CONFIG: AppConfig = {
   // domain ED rejects 1 wei transfers)
   publicPublisherAddress: '0x1aa245c60e632e884c638e247ee23c1ccf52a328',
   publicPublisherDeployBlock: 5334946,
+  // FileState directory state layer mainnet deploy (contracts/deployments.json
+  // auto-evm-mainnet-file-state, 2026-11-03); empty = feature disabled
+  fileStateAddress: '0xb99b95369106b92e6b1b4b28bd702358608912a9',
+  fileStateDeployBlock: 5363752,
 }
 
 // A few dev/acceptance devices stored the v1 address as registryAddress back
@@ -83,6 +92,10 @@ export function loadConfig(): AppConfig {
         typeof parsed.publicPublisherAddress === 'string' ? parsed.publicPublisherAddress : DEFAULT_CONFIG.publicPublisherAddress,
       publicPublisherDeployBlock:
         Number(parsed.publicPublisherDeployBlock) > 0 ? Number(parsed.publicPublisherDeployBlock) : DEFAULT_CONFIG.publicPublisherDeployBlock,
+      fileStateAddress:
+        typeof parsed.fileStateAddress === 'string' ? parsed.fileStateAddress : DEFAULT_CONFIG.fileStateAddress,
+      fileStateDeployBlock:
+        Number(parsed.fileStateDeployBlock) > 0 ? Number(parsed.fileStateDeployBlock) : DEFAULT_CONFIG.fileStateDeployBlock,
     }
   } catch {
     return { ...DEFAULT_CONFIG }

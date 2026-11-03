@@ -1002,6 +1002,16 @@ textarea:focus {
 .file-details summary { cursor: pointer; padding: 5px; font-size: 13px; }
 .file-details dd { margin-left: 0; overflow-wrap: anywhere; font-size: 12px; }
 .file-details dt { color: var(--muted); margin-top: 8px; font-size: 12px; }
+
+/* version grouping and hidden state (2026-11-03): vN badge / hidden badge /
+   dimmed hidden rows / expandable history table */
+.version-badge { margin-left: 6px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; font-size: 11px; color: var(--muted); vertical-align: middle; }
+.hidden-badge { margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); vertical-align: middle; }
+tr.hidden-row > td { opacity: 0.55; }
+tr.history-row > td { padding-top: 0; border-top: none; }
+.version-table { max-width: 100%; }
+.version-table td { padding: 4px 8px; }
+
 /* unowned group: collapsed list with manual claiming */
 /* FAQ (About page): collapsible Q&A */
 .faq-item { border-top: 1px solid var(--border); padding: 8px 0; }

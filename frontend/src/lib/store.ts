@@ -56,6 +56,9 @@ export interface PublishTaskRecord {
   nodes: { cid: string; blake3: string; bytes: number }[]
   /** Additional recovery nodes in the same, single transaction. Absent on legacy tasks. */
   recovery?: { manifestCid: string; nodes: { cid: string; blake3: string; bytes: number }[] }
+  /** Version note (2026-11-03, optional): verifyPublishTask writes it back when
+   *  rebuilding the manifest; legacy tasks lack this field */
+  note?: string
   totalBytes: number
   startHeight: number
   txHashes: string[]
