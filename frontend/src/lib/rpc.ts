@@ -203,7 +203,8 @@ const WRITE_METHODS = new Set(['author_submitExtrinsic', 'author_submitAndWatchE
  * larger batches where HTTP would hit the 413 wall — and it is known to work
  * only outside the browser (browser WS drops multi-MB messages silently,
  * 2026-11-03 measurement; Node replies in seconds). Publishing batches are
- * budgeted at 4.4 MB encoded, so browser flows never reach this threshold. */
+ * budgeted at 2 MB encoded (mainnet-verified), so browser flows never reach
+ * this threshold. */
 export const WS_SUBMIT_THRESHOLD_BYTES = 6 * 1024 * 1024
 
 export const useWsSubmit = (encodedLength: number): boolean => encodedLength > WS_SUBMIT_THRESHOLD_BYTES

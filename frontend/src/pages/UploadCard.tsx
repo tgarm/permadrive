@@ -27,11 +27,11 @@ import type { Manifest } from '../lib/manifest'
 import { stampFileOwner } from '../lib/fileOwnership'
 import { nodeCount, t, useI18n } from '../i18n'
 
-// Per-file cap (dynamic batching since 2026-11-03): 64 MiB = ~15 batches of
-// the 4.4 MB budget, one wallet signature per batch (the confirm panel
-// previews the signature count from the file length). The budget encodes to
-// ~8.8 MB hex POST, inside the public gateways' ~15 MB body cap. Larger files
-// belong to the desktop/CLI roadmap (browser memory ~3x the file plus
+// Per-file cap (dynamic batching since 2026-11-03): 64 MiB = ~33 batches of
+// the 2 MB budget, one wallet signature per batch (the confirm panel previews
+// the signature count from the file length). The budget is mainnet-calibrated
+// (2.23 MB accepted on-chain, 4.39 MB rejected by the block limits). Larger
+// files belong to the desktop/CLI roadmap (browser memory ~3x the file plus
 // per-batch confirmation time are the web's practical bounds).
 const MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 

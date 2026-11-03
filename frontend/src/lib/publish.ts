@@ -5,7 +5,7 @@
 //                           on large remarks (mainnet runtime bug), so use a
 //                           first-order approximation
 //   publishPrepared(...)    dynamic batching: remarks are grouped by an
-//                           encoded-size budget (default 4.4 MB per batch),
+//                           encoded-size budget (default 2 MB per batch),
 //                           one wallet signature per batch, confirmed
 //                           sequentially; "provably not sent" failures can be
 //                           retried / shrunk / aborted interactively, anything
@@ -61,12 +61,15 @@ export interface PreparedUpload {
 // The public gateways cap HTTP request bodies at ~15 MB (hex terms; 14 MB
 // passes / 16 MB returns 413 on both domains, measured), and browser WS drops
 // multi-MB messages silently — so remarks are grouped by an encoded-size
-// budget, one wallet signature per batch. A 4.4 MB budget encodes to an
-// ~8.8 MB hex POST, 5 MB under the verified 14 MB pass line; a 4 MiB file is
-// one batch, 8 MiB is two, 64 MiB is fifteen. Official AutoDrive carries a
-// single node per transaction (64 KiB, submitted concurrently) — the budget is
-// still ~65x its per-tx size. The recovery envelope rides the last batch.
-export const MAX_BATCH_ENCODED_BYTES = Math.floor(4.4 * 1024 * 1024)
+// budget, one wallet signature per batch. The budget is a mainnet-calibrated
+// value: a 2.23 MB batchAll was accepted on-chain while 4.39 MB was rejected
+// by the node (1010 "would exhaust the block limits" — the block limits bind
+// before the gateway wall); 2 MB keeps a 10% margin so users never see a
+// rejection prompt. A 2 MiB file is one batch, 8 MiB is five, 64 MiB is
+// thirty-three. Official AutoDrive carries a single node per transaction
+// (64 KiB, submitted concurrently) — the budget is still ~30x its per-tx size.
+// The recovery envelope rides the last batch.
+export const MAX_BATCH_ENCODED_BYTES = 2 * 1024 * 1024
 /** Lower bound for the shrink fallback (user-facing chain 4 → 2 → 1 MB) */
 export const MIN_BATCH_ENCODED_BYTES = 1024 * 1024
 

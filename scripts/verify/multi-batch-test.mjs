@@ -42,7 +42,7 @@ const ok = (cond, label) => {
   // empty input
   ok(planBatches([], len(100), 300).length === 0, 'planBatches: empty input, zero groups')
   // tier constants
-  ok(MAX_BATCH_ENCODED_BYTES === Math.floor(4.4 * 1024 * 1024), 'MAX_BATCH_ENCODED_BYTES = 4.4 MiB')
+  ok(MAX_BATCH_ENCODED_BYTES === 2 * 1024 * 1024, 'MAX_BATCH_ENCODED_BYTES = 2 MiB (mainnet-verified: 2.23 MiB accepted, 4.39 MiB rejected)')
   ok(MIN_BATCH_ENCODED_BYTES === 1024 * 1024, 'MIN_BATCH_ENCODED_BYTES = 1 MiB')
   ok(estimateBatchCount(0) === 1 && estimateBatchCount(1) === 1 && estimateBatchCount(MAX_BATCH_ENCODED_BYTES + 1) === 2, 'estimateBatchCount: floor of 1, rounds up')
 }
@@ -137,9 +137,9 @@ const prepared = (n, cid = 'bafk-mb-root') => ({
   totalBytes: n * 100,
 })
 
-// ---- 2. integration: sequential multi-batch publish (4 remarks x 1.5 MB, 4.4 MB budget -> 2+2+1) ----
+// ---- 2. integration: sequential multi-batch publish (5 remarks x 0.6 MB, 2 MB budget -> 3+2) ----
 {
-  const scenario = { submits: [], chain: [], remarkCalls: 0, remarkEncodedLength: 1.5 * 1024 * 1024 }
+  const scenario = { submits: [], chain: [], remarkCalls: 0, remarkEncodedLength: 0.6 * 1024 * 1024 }
   const api = mockApi(scenario)
   const titles = []
   const manifest = await publishPrepared(api, prepared(4), signer, onStage, {}, {
@@ -148,17 +148,18 @@ const prepared = (n, cid = 'bafk-mb-root') => ({
     confirmTransaction: (submit, batchIndex, totalBatches) => { titles.push([batchIndex, totalBatches]); return submit() },
   })
   ok(scenario.remarkCalls === 5, `2: 5 remark constructions (4 content + 1 recovery), got ${scenario.remarkCalls}`)
-  ok(manifest.txs.length === 3, `2: 5x1.5MB under a 4.4MB budget -> 3 batches, got ${manifest.txs.length}`)
-  ok(scenario.batchCalls === 2, `2: multi-remark batches use batchAll (2+2); a single-remark batch skips the wrapper (atomicity equivalent), got ${scenario.batchCalls}`)
-  ok(titles.length === 3 && titles[0][0] === 0 && titles[2][0] === 2, '2: wallet actions carry batch indices 0..2')
-  ok(titles.every(([, n]) => n === 3), '2: wallet actions carry the batch total 3')
+  ok(manifest.txs.length === 2, `2: 5x0.6MB under a 2MB budget -> 2 batches (3+2), got ${manifest.txs.length}`)
+  ok(scenario.batchCalls === 2, `2: both groups are multi-remark -> batchAll, got ${scenario.batchCalls}`)
+  ok(titles.length === 2 && titles[0][0] === 0 && titles[1][0] === 1, '2: wallet actions carry batch indices 0..1')
+  ok(titles.every(([, n]) => n === 2), '2: wallet actions carry the batch total 2')
   const pending = await listPendingPublish()
   ok(pending.length === 0, '2: no pending-verify task left after completion')
 }
 
 // ---- 3. shrink fallback: batch 1 capacity-rejected -> shrink -> remaining remarks regrouped at the new budget (confirmed batches never resent) ----
+// 4 remarks x 0.8 MB: batch 1 (2 remarks) rejected at the 2 MB budget; replanning at 1 MB gives singleton batches
 {
-  const scenario = { submits: [], chain: [], remarkCalls: 0, remarkEncodedLength: 1.5 * 1024 * 1024, tooLargeAt: 1 }
+  const scenario = { submits: [], chain: [], remarkCalls: 0, remarkEncodedLength: 0.8 * 1024 * 1024, tooLargeAt: 1 }
   const api = mockApi(scenario)
   const prompts = []
   const manifest = await publishPrepared(api, prepared(3), signer, onStage, {}, {
@@ -171,15 +172,14 @@ const prepared = (n, cid = 'bafk-mb-root') => ({
   })
   ok(prompts.length === 1 && prompts[0].batchIndex === 0 && prompts[0].totalBatches === 2, `3: batch 1 rejection triggers one prompt (batchIndex=${prompts[0]?.batchIndex})`)
   ok(prompts[0].canShrink === true, '3: shrinkable at the initial budget')
-  // 4 remarks (3 content + 1 recovery) @1.5MB: batch 1 (2 remarks) rejected at
-  // 4.4MB; replanning at 2.2MB gives one remark per batch -> 4 successful batches
-  ok(manifest.txs.length === 4, `3: all 4 remarks on chain after shrink, got ${manifest.txs.length}`)
+  ok(manifest.txs.length === 4, `3: all 4 remarks on chain after shrink (singleton batches at 1 MB), got ${manifest.txs.length}`)
   ok(scenario.submits.length === 5, `3: 1 rejection + 4 successes, got ${scenario.submits.length}`)
   const pending = await listPendingPublish()
   ok(pending.length === 0, '3: no pending task after the shrink completes')
 }
 
 // ---- 4. retry: the same batch re-signed and resubmitted (provably not sent -> safe), succeeding the second time ----
+// 2 remarks x 1.5 MB: singleton batches at the 2 MB budget; batch 1 rejected -> retry -> succeeds
 {
   const scenario = { submits: [], chain: [], remarkCalls: 0, remarkEncodedLength: 1.5 * 1024 * 1024, tooLargeAt: 1 }
   const api = mockApi(scenario)
@@ -193,8 +193,8 @@ const prepared = (n, cid = 'bafk-mb-root') => ({
     },
   })
   ok(prompts === 1, '4: one failure, one prompt')
-  ok(manifest.txs.length === 1 && scenario.submits.length === 2, `4: same batch resubmitted once and succeeds (${scenario.submits.length} submits)`)
-  ok(scenario.batchCalls === 1, '4: retry reuses the same batch tx (re-signed, not regrouped)')
+  ok(manifest.txs.length === 2 && scenario.submits.length === 3, `4: batch 1 retry succeeds + batch 2 normal (${scenario.submits.length} submits)`)
+  ok((scenario.batchCalls ?? 0) === 0, '4: singleton batches skip the wrapper; retry reuses the same batch tx (re-signed, not regrouped)')
 }
 
 // ---- 5. abort: strip the phantom hash and halt; the task keeps confirmed batches for verification ----
@@ -217,7 +217,7 @@ const prepared = (n, cid = 'bafk-mb-root') => ({
   const pending = await listPendingPublish()
   ok(pending.length === 1, '5: task retained after halting')
   ok(pending[0].txHashes.length === 1, `5: phantom hash stripped; only confirmed batches kept (${pending[0]?.txHashes.length})`)
-  ok(pending[0].txNodes.length === 1 && pending[0].txNodes[0] === 2, '5: txNodes aligned with the confirmed batch (batch 1 = 2 remarks)')
+  ok(pending[0].txNodes.length === 1 && pending[0].txNodes[0] === 1, '5: txNodes aligned with the confirmed batch (batch 1 = 1 remark singleton)')
 }
 
 // ---- 6. result unknown: never prompts, never resends; the task keeps the failed batch hash (may be pooled) ----

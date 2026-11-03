@@ -31,7 +31,12 @@ const manifestPublishMetaKey = (rootCid: string) => `manifestPublish:${rootCid}`
 
 export const getManifestPublishMeta = async (rootCid: string): Promise<ManifestPublicationMeta | undefined> => {
   const manifest = await getManifest(rootCid)
-  const inclusion = manifest?.txs[0]
+  // the recovery envelope always rides the LAST batch (publish.ts appends the
+  // recovery remarks last) — record the last tx height: identical for the old
+  // single-batch flow, but with multi-batch publishing the first batch's
+  // height would miss the recovery scan window (found in the 2026-11-03
+  // mainnet 4-batch acceptance)
+  const inclusion = manifest?.txs.length ? manifest.txs[manifest.txs.length - 1] : undefined
   if (manifest?.recovery && inclusion) return { manifestCid: manifest.recovery.manifestCid, height: inclusion.height, txHash: inclusion.txHash }
   return getMeta<ManifestPublicationMeta>(manifestPublishMetaKey(rootCid))
 }
