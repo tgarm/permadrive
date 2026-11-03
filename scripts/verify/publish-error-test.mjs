@@ -645,7 +645,7 @@ const FAST = { scanTimeoutMs: 400, confirmTimeoutMs: 800, depth: 1 }
     tx.signAsync = () => new Promise(resolve => { release = resolve })
     return tx
   }
-  await assert.rejects(publishPrepared(api, prepared(1), signer, onStage, {}, { walletTimeoutMs: 10 }), /walletSteps.signTimeout|timed out|超时/)
+  await assert.rejects(publishPrepared(api, prepared(1), signer, onStage, {}, { walletTimeoutMs: 10 }), /walletSteps.signTimeout|timed out|\u8d85\u65f6/)
   release()
   await new Promise(resolve => setTimeout(resolve, 20))
   ok(scenario.submits.length === 0, 'late wallet signature after timeout never broadcasts')
