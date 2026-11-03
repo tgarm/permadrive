@@ -1003,5 +1003,9 @@ textarea:focus {
 .file-details dd { margin-left: 0; overflow-wrap: anywhere; font-size: 12px; }
 .file-details dt { color: var(--muted); margin-top: 8px; font-size: 12px; }
 /* unowned group: collapsed list with manual claiming */
+/* FAQ (About page): collapsible Q/* FAQ（About 页）：details 折叠问答 */A */
+.faq-item { border-top: 1px solid var(--border); padding: 8px 0; }
+.faq-item summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.faq-item[open] summary { margin-bottom: 6px; }
 .unowned-files { margin-top: 12px; }
 .unowned-files summary { cursor: pointer; padding: 5px; font-size: 13px; color: var(--muted); }

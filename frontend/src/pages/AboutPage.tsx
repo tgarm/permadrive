@@ -161,6 +161,17 @@ export function AboutPage() {
       </section>
 
       <section className="card">
+        <h2>{t('about.faqTitle')}</h2>
+        <p className="muted" style={{ marginTop: 0 }}>{t('about.faqIntro')}</p>
+        {(['faq1', 'faq2', 'faq3', 'faq4', 'faq5', 'faq6', 'faq7'] as const).map((k) => (
+          <details key={k} className="faq-item">
+            <summary>{t(`about.${k}q`)}</summary>
+            <p className="privacy-note" style={{ marginBottom: 0 }}>{t(`about.${k}a`)}</p>
+          </details>
+        ))}
+      </section>
+
+      <section className="card">
         <h2>{t('about.sovereigntyTitle')}</h2>
         <div className="kv">
           <span>{t('about.sovAccounts')}</span>
