@@ -14,30 +14,17 @@ Files are packed into IPLD DAGs in the browser and published directly to the Aut
 ## Features
 
 - **Wallet-native identity** — connect a Substrate extension wallet (Talisman / SubWallet / polkadot.js); mixed EVM/Substrate account lists are filtered before address conversion. Connections are explicit after a reload. An EVM wallet handles registry operations on Auto-EVM. Both wallet columns show independent AI3 balances with read-only refresh; consensus shows available funds (free minus frozen). Failed balance queries are shown as unavailable.
-- **Permanent storage, pay per use** — pay the on-chain byte fee directly (~2.1 AI3/MB, about half the official AutoDrive price, with no 90-day credit expiry)
+- **Permanent storage, pay per use** — pay the on-chain byte fee directly (~2 AI3/MB, about half the official AutoDrive price, with no 90-day credit expiry)
 - **No required backend** — the build output is fully static and hostable anywhere; all dependencies (RPC, indexer) are permissionless public infrastructure with CORS enabled (browser-direct)
 - **On-chain recovery directory** — recovery manifests are stored on-chain and registered to your wallet; no manual manifest import/export is required
 - **Cross-device recovery** — on a new device, the same wallet signature recovers the full file index from the on-chain registry and re-downloads the files
 - **Encrypted files** — all new files are encrypted: a random data key encrypts the file (AES-256-GCM) before the standard DAG packing, and the key is wrapped with your EVM wallet signature plus an optional passphrase; downloads decrypt automatically with a passphrase dialog as the fallback. Filenames and sizes stay public; the content is yours only (manifest v2, `pdenc-v1`)
 - **On-chain private messages** — end-to-end encrypted mail between addresses (x25519-xsalsa20-poly1305, MetaMask-compatible envelopes or locally derived keypairs). Who talks to whom, when, and ciphertext length are public; only the content is private. receiving must be enabled once from the Messages page (one explicit action: the wallet asks for your encryption public key — no gas — and, if needed, publishes it in a separate gas-paid transaction)
 - **Direct sales** — sell encrypted files for AI3: the purchase transaction pays the seller directly (10% platform fee) in the same block — no escrow, no platform refund; buyers rate purchases on-chain (helpful / not-as-described, one vote per buyer per product, changeable). The file key is delivered as ciphertext over the private-message channel (pdgrant v3, bound to the sales contract and order). Delivery is manual: the seller delivers when online, and the purchase flow says so before you pay. Digital-goods mode: buying grants the file itself, there is no DRM
-- **Sharing (three states)** — every encrypted file is unshared, for-sale, or public, and the state only moves one way. "Public" sells the file to a public publisher contract at a dust price (10× the 1e12 shannon account-existence deposit; a 1-wei version proved physically impossible on this domain) in the same transaction that publishes the file key in a `Published` event — permanent, atomic, no "received but withheld" middle state. Public files download from a share link (`#/s?m&h&o[&k]`) with **no wallet at all**: the key comes from the link or from the on-chain event, and the decrypted content is checked against the event's published digest before saving. Broadcasting counts as publishing (a failed transaction does not make the file private again); delisting never revokes keys already delivered to buyers
+- **Sharing (three states)** — every encrypted file is unshared, for-sale, or public, and the state only moves one way. "Public" sells the file to a public publisher contract at a dust price (10× the 1e12 shannon account-existence deposit) in the same transaction that publishes the file key in a `Published` event — permanent, atomic, no "received but withheld" middle state. Public files download from a share link (`#/s?m&h&o[&k]`) with **no wallet at all**: the key comes from the link or from the on-chain event, and the decrypted content is checked against the event's published digest before saving. Broadcasting counts as publishing (a failed transaction does not make the file private again); delisting never revokes keys already delivered to buyers
 - **Discover** — browse every public file on the network with **no wallet**: the latest publications, the hottest files (ranked by unique buyers), files from publishers you follow, and your saved bookmarks. Downloads reuse the share-link pipeline and are integrity-checked against the on-chain publication claim before saving. My Files lists only the connected account's files; local files with no ownership info (uploaded by older versions) appear in a separate "unowned" group you can claim manually
 - **Versioned notes** — append-only text records; every save publishes a new immutable version and registers it in the on-chain registry (the version chain survives any device; unchanged content re-saving is free under content addressing)
 - **Encrypted vault** — a password manager whose entries are AES-256-GCM encrypted as one envelope before publishing; the data key is wrapped twice — by your passphrase (exportable keystore file, the universal recovery path) and by an EVM wallet signature (passphrase-free unlock on new devices). Only ciphertext ever reaches the chain. Full principles, threat model and do-it-yourself verification: [VAULT.md](VAULT.md)
-
-## Repository layout
-
-```
-frontend/               Frontend (Vite + React + TS; build output is fully static)
-contracts/              FileRegistry v1 / v2 (Solidity) + mainnet deployments (deployments.json)
-scripts/
-  verify/               Read-only checks of public endpoints and on-chain fees (no tx, no signing)
-  poc/                  End-to-end protocol scripts: pack & publish / scan & retrieve / account generation (shared lib)
-  p2/                   FileRegistry v1 compile / deploy / interaction; XDM cross-domain funding helper
-  p3/                   FileRegistryV2 compile / deploy / semantic selftest / v1→v2 migration; vault crypto format selftest
-  p4/                   favicon PNG generator + reproducibility check; file-encryption selftest; Mailbox deploy + selftest; Paywall deploy + full-state-machine selftest; PaywallV2 on-chain acceptance runner (read-only preflight + three order paths, journal/resume, spend cap); DirectSales + PublicPublisher adversarial tests; deep-link parsing test
-```
 
 ## Quick start (frontend)
 
@@ -54,15 +41,26 @@ npm run build    # static output → dist/ (deployable to any static host)
 - Upload: pick a file → confirm the fee → sign → 12-block confirmation → background DSN archiving watch
 - Download: nodes are fetched from the chain and reassembled, sha256 verified automatically; recover files through the on-chain wallet directory
 
-## Deploy (Vercel)
+## First-use guidance
 
-The repo root ships with a [`vercel.json`](vercel.json) (install/build commands and output directory point at the `frontend/` subdirectory) — after pushing to GitHub, **no dashboard configuration is needed**:
+My Files provides four visual steps: connect accounts, create an encrypted file, save its on-chain recovery directory, then download and verify. New files are always encrypted; sharing and publication are later actions. Manifest import/export is not part of the user flow. New uploads normally require four explicit wallet confirmations: two free unlock-message signatures, one consensus transaction saving encrypted content and recovery information together, then one EVM directory registration paying the service fee and gas. Complete registration promptly: until then, file-discovery information still depends on this browser. Clearing or corrupting site data may make the file unrecoverable; paid storage fees are not refunded. A reload can resume registration using existing browser records. Keep your wallet/passphrase safe. Verification checks are session-only. See [recovery format and interruption behavior](RECOVERY.md).
 
-1. Push the code to GitHub
-2. Import the repo at [vercel.com/new](https://vercel.com/new) → Deploy (change nothing)
-3. Custom domain (optional): Vercel project Settings → Domains, add your domain (e.g. `permadrive.ai3.land`) and add the CNAME record at your DNS provider
+Wallet steps remain visible and disabled while the request is being prepared, awaiting approval, or waiting for a chain result. Rejection leaves an explicit error instead of silently advancing. Fee estimates reuse wallet-bar balance snapshots and do not query balances again; refresh the wallet balance to update funding gaps.
 
-The frontend has no routing, no environment variables and no API keys; the build output is fully static — GitHub Pages / IPFS / Cloudflare Pages work equally well (`vite.config.ts` already uses relative asset paths, `base: './'`).
+## Repository layout
+
+```
+frontend/               Frontend (Vite + React + TS; build output is fully static)
+contracts/              Solidity contracts: FileRegistry v1/v2, Mailbox, Paywall v1/v2,
+                        DirectSales, PublicPublisher, FileState + mainnet deployments
+                        (deployments.json)
+scripts/
+  verify/               Read-only checks of public endpoints and on-chain fees (no tx, no signing)
+  poc/                  End-to-end protocol scripts: pack & publish / scan & retrieve / account generation (shared lib)
+  p2/                   FileRegistry v1 compile / deploy / interaction; XDM cross-domain funding helper
+  p3/                   FileRegistryV2 compile / deploy / semantic selftest / v1→v2 migration; vault crypto format selftest
+  p4/                   favicon PNG generator + reproducibility check; file-encryption selftest; Mailbox deploy + selftest; Paywall deploy + full-state-machine selftest; DirectSales / PublicPublisher / FileState deploy scripts, selftests and adversarial tests; on-chain acceptance runner (read-only preflight + order paths, journal/resume, spend cap); deep-link parsing test
+```
 
 ## Scripts
 
@@ -87,16 +85,38 @@ npm run selftest          # semantic selftest against the deployed contract (ide
 npm run vault-crypto      # offline vault envelope/keystore crypto selftest (no account, no cost)
 ```
 
+Browser regression checks live in `scripts/verify/browser/` (Playwright):
+
+```bash
+cd scripts/verify/browser
+npm install && npx playwright install chromium
+npm run browser           # unfunded wallet sentinel + mock chain fixtures; never broadcasts
+```
+
+An optional real public-download fixture needs `PD_PUBLIC_SHARE_URL` and `PD_PUBLIC_SHA256`. Real extension-wallet compatibility and mainnet transaction acceptance are separate checks.
+
+## Deploy (Vercel)
+
+The repo root ships with a [`vercel.json`](vercel.json) (install/build commands and output directory point at the `frontend/` subdirectory) — after pushing to GitHub, **no dashboard configuration is needed**:
+
+1. Push the code to GitHub
+2. Import the repo at [vercel.com/new](https://vercel.com/new) → Deploy (change nothing)
+3. Custom domain (optional): Vercel project Settings → Domains, add your domain (e.g. `permadrive.ai3.land`) and add the CNAME record at your DNS provider
+
+The frontend has no routing, no environment variables and no API keys; the build output is fully static — GitHub Pages / IPFS / Cloudflare Pages work equally well (`vite.config.ts` already uses relative asset paths, `base: './'`).
+
 ## Deployed contracts (Auto-EVM mainnet, chainId 870)
 
 | Contract | Address | Status |
 |---|---|---|
-| FileRegistry v2 | `0x79a22e5dc2e0613d8e9b491a1a51038b9197b185` | Active; register charges a dev fee: `max(0.01 AI3, size × ~1.05e11 wei)`, overpayment is refunded |
+| FileRegistry v2 | `0x79a22e5dc2e0613d8e9b491a1a51038b9197b185` | Active; directory registration charges a dev fee: `max(0.01 AI3, size × feePerByte)` — feePerByte is re-anchored periodically to 10% of the current on-chain storage fee (~2e11 wei ≈ 0.2 AI3/MB as of 2026-11), overpayment is refunded |
 | Mailbox | `0x3446abe95edc17e4056a28d7c5fb10d579395200` | Active; on-chain private messages — `announceEncryptionKey` + `send` (permissionless, ciphertext ≤ 8 KiB) |
-| Paywall v1 | `0xb51be7a5cc1a03fd51892d9db1fc942aa164405a` | **Frozen, read-only** (seller-overwrite flaw, 2026-10-30): existing orders keep refund / confirm-receipt / withdraw entries; new listings and purchases are disabled |
+| DirectSales | `0x4321c47c84fd38c8bff8ca33cf0a0592f3a2ee9b` | Active; direct sales: the purchase transaction pays seller + 10% platform fee in the same transaction (no escrow, no platform refunds), with on-chain ratings |
+| PublicPublisher | `0x1aa245c60e632e884c638e247ee23c1ccf52a328` | Active; public log for sharing: `publish` sells the file to the contract at a dust price (1e13 shannon) and emits `Published` with the file key — purchase and key disclosure complete atomically; `sales` is construction-time immutable, pointing at the official DirectSales instance |
+| FileState | `0xb99b95369106b92e6b1b4b28bd702358608912a9` | Active; per-file directory state: hidden flag + generic `bytes32` properties (permissionless, no funds involved); file version grouping is derived from on-chain heights, not stored on-chain |
+| Paywall v1 | `0xb51be7a5cc1a03fd51892d9db1fc942aa164405a` | **Frozen, read-only** after a security review (2026-10-30, see [HISTORY.md](HISTORY.md)); existing orders keep refund / confirm-receipt / withdraw entries; new listings and purchases are disabled |
 | Paywall v1 (test) | `0x4db00db74769a0e8d38654bbe20144668c105acf` | Frozen, read-only (same flaw) |
-| Paywall v2 | see `contracts/deployments.json` after deployment | Order-model redesign: seller-namespace listings (`listingId = keccak256(seller, key)`), immutable order snapshots (seller/price/feeBps) with independent orderIds, `purchase(key, seller, maxPrice)`; an offline adversarial suite (43 assertions, local ganache) covers overwrite, front-running, reprice/delist/relist and fund conservation. Deployment is a deliberate separate step |
-| PublicPublisher | see `contracts/deployments.json` after deployment | Public log contract: `publish` sells the file to the contract at 1 wei (returned in the same transaction) and emits `Published` with the file key — the purchase and the key disclosure complete atomically; `sales` is construction-time immutable, pointing at the official DirectSales instance; a 27-assertion offline adversarial suite (local ganache) covers wrong seller/listing/value/key/CID and the 1 wei round trip |
+| Paywall v2 | not deployed | Escrow order-model redesign, adversarially tested offline; deployment deliberately paused after direct sales replaced escrow (see [HISTORY.md](HISTORY.md)) |
 | FileRegistry v1 | `0x1751f7534b85417da6e093a2e85b4b7b90ee2e4a` | Frozen, read-only |
 
 Deployment records (tx / block) live in [contracts/deployments.json](contracts/deployments.json); explorer: <https://explorer.auto-evm.mainnet.autonomys.xyz>
@@ -107,9 +127,13 @@ Deployment records (tx / block) live in [contracts/deployments.json](contracts/d
 - **The vault keystore is the only universal recovery path** — wallet-signature unlock depends on reproducible signatures (verified for local EVM keys; most extension wallets work, some may not). Losing both the wallet AND the keystore file means the ciphertext stays on-chain forever but can never be opened.
 - **Public RPCs are rate-limited** — the scripts throttle and back off; do not hammer public nodes with concurrency.
 - **Confirmation policy** — publishes confirm at 12-block depth + canonical check (Autonomys testnet finality lag can reach 15 days; never wait for finalized).
-- **Paywall v1 security note (2026-10-30)** — a design review found that anyone could overwrite an existing listing (the non-zero `setPrice` branch had no ownership check) and that settlements read the *current* listing seller, so an attacker could re-list a paid key, mark it delivered and drain escrowed funds without ever holding the file key. The contract has no upgrade path; v1 is frozen read-only (existing orders keep refund / confirm / withdraw), and `contracts/PaywallV2.sol` fixes the order model (seller namespace, immutable order snapshots, independent orderIds, `maxPrice` bound). The frontend activates v2 once its address is configured in Settings.
+- **Paywall v1 is frozen read-only** — a 2026-10-30 security review found a seller-overwrite flaw before any public use; existing orders keep refund / confirm-receipt / withdraw entries. Post-mortem: [HISTORY.md](HISTORY.md).
 - **Publish recovery** — a publish whose confirmation does not finish (timeout / lost response) is never auto-resent; the signed tx hashes and rebuild metadata are persisted locally and the files page offers a hash-based "verify" that rebuilds the manifest without republishing.
 - **Real costs** — the frontend and scripts operate on mainnet and spend real AI3; the contracts are unaudited — verify with small amounts first.
+
+## History
+
+Project timeline, contract deployment history and security post-mortems: [HISTORY.md](HISTORY.md).
 
 ## Ecosystem
 
@@ -121,11 +145,3 @@ More from the same family — open-source, pure-frontend tools for Autonomys:
 ## License
 
 [MIT](LICENSE)
-
-## First-use guidance and browser checks
-
-My Files provides four visual steps: connect accounts, create an encrypted file, save its on-chain recovery directory, then download and verify. New files are always encrypted; sharing and publication are later actions. Manifest import/export is not part of the user flow. New uploads normally require four explicit wallet confirmations: two free unlock-message signatures, one consensus transaction saving encrypted content and recovery information together, then one EVM directory registration paying the service fee and gas. Complete registration promptly: until then, file-discovery information still depends on this browser. Clearing or corrupting site data may make the file unrecoverable; paid storage fees are not refunded. A reload can resume registration using existing browser records. Keep your wallet/passphrase safe. Verification checks are session-only. See [recovery format and interruption behavior](RECOVERY.md).
-
-Browser checks live in `scripts/verify/browser/`. From `scripts/verify`, install dependencies, run `npx playwright install chromium`, then `npm run browser`. The default suite uses an unfunded wallet sentinel and mock chain fixtures; it never broadcasts transactions. An optional real public-download fixture needs `PD_PUBLIC_SHARE_URL` and `PD_PUBLIC_SHA256`. Real extension-wallet compatibility and mainnet transaction acceptance are separate checks.
-
-Wallet steps remain visible and disabled while the request is being prepared, awaiting approval, or waiting for a chain result. Rejection leaves an explicit error instead of silently advancing. Fee estimates reuse wallet-bar balance snapshots and do not query balances again; refresh the wallet balance to update funding gaps.
