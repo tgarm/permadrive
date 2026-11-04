@@ -15,7 +15,8 @@
     "footer": {
       "privacy": "Data goes on-chain permanently and cannot be deleted · the vault only ever holds ciphertext",
       "toolset": "Part of the AI3.LAND toolset:",
-      "xdmBridge": "XDM Bridge — cross-domain transfers"
+      "xdmBridge": "XDM Bridge — cross-domain transfers",
+      "source": "Open source: source code on GitHub"
     }
   },
   "common": {

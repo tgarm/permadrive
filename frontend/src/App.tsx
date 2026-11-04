@@ -106,6 +106,10 @@ function Shell() {
         </a>
         {' · '}
         <a href="https://ai3.land/" target="_blank" rel="noreferrer noopener">ai3.land</a>
+        {' · '}
+        <a href="https://github.com/tgarm/permadrive" target="_blank" rel="noreferrer noopener">
+          {t('app.footer.source')}
+        </a>
       </footer>
     </div>
   )

@@ -15,7 +15,8 @@
     "footer": {
       "privacy": "数据永久上链、不可删除 · 密码库上链的只有密文",
       "toolset": "AI3.LAND 工具族：",
-      "xdmBridge": "XDM 跨域桥 — 跨域转账"
+      "xdmBridge": "XDM 跨域桥 — 跨域转账",
+      "source": "开源：源代码见 GitHub"
     }
   },
   "common": {
